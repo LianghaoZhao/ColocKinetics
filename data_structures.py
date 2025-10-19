@@ -29,11 +29,11 @@ class CellData:
         # Note: Correlation calculation is now external
 
 @dataclass
-class TimeSeriesAnalysis:
+class FileData:
     """时间序列分析的数据结构"""
     file_path: str
     time_points: int
-    cells: Dict[int, List[CellData]] = field(default_factory=dict)  # {cell_id: [CellData at time 0, time 1, ...]}
+    cells: Dict[int, List[CellData]] = field(default_factory=dict)
     all_cells: List[CellData] = field(default_factory=list)  # 所有时间点的所有细胞
     skip_initial_frames: int = field(default=0)  # 跳过的初始帧数
 
@@ -44,4 +44,3 @@ class TimeSeriesAnalysis:
         self.cells[cell_data.cell_id].append(cell_data)
         self.all_cells.append(cell_data)
 
-    # Note: get_correlation_over_time, get_intensity_over_time, fit_cell_reaction are now external
