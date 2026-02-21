@@ -33,21 +33,24 @@ class MainAnalyzer:
         """获取所有细胞的汇总数据 (based on CellData attributes)"""
         data = []
         for file in self.all_files:
+            # 预先计算每个 cell_id 的相关系数（避免重复计算）
+            cell_correlations = {}
+            for cell_id in file.cells.keys():
+                time_points, correlations, p_values = CoLocalizationMetrics.get_correlation_over_time_of_a_cell(file, cell_id)
+                # 构建 time_point -> (corr, p_val) 的映射
+                cell_correlations[cell_id] = {t: (c, p) for t, c, p in zip(time_points, correlations, p_values)}
+            
             for cell in file.all_cells:
                 if cell.time_point >= file.skip_initial_frames:
-                    time_points, correlations, p_values = CoLocalizationMetrics.get_correlation_over_time_of_a_cell(file, cell.cell_id)
-                    corr_val,p_val = np.nan,np.nan
-                    for t, corr, p in zip(time_points, correlations, p_values):
-                        if t == cell.time_point:
-                            corr_val = corr
-                            p_val = p
-                            break
+                    # 直接查找预计算的结果
+                    corr_map = cell_correlations.get(cell.cell_id, {})
+                    corr_val, p_val = corr_map.get(cell.time_point, (np.nan, np.nan))
 
                     data.append({
                         'file_path': cell.file_path,
                         'cell_id': cell.cell_id,
                         'time_point': cell.time_point,
-                        'pearson_corr': corr_val, # Use value from coloc_metrics calculation
+                        'pearson_corr': corr_val,
                         'p_value': p_val,
                         'n_pixels': cell.n_pixels,
                         'mean_ch1': np.mean(cell.intensity1),

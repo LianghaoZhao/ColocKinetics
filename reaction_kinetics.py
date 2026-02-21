@@ -1,8 +1,18 @@
+import warnings
 import numpy as np
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, OptimizeWarning
 from typing import Dict
 
-from skimage.future import fit_segmenter
+# 移除未使用的导入
+# from skimage.future import fit_segmenter
+
+# 定义安全的指数上限，防止溢出
+_EXP_MAX = 700  # np.exp(709) 接近 float64 上限
+
+
+def _safe_exp(x):
+    """安全的指数函数，防止溢出"""
+    return np.exp(np.clip(x, -_EXP_MAX, _EXP_MAX))
 
 
 def first_order_reaction(t, A0, k, A_inf=0):
@@ -10,18 +20,21 @@ def first_order_reaction(t, A0, k, A_inf=0):
     一级反应方程
     A(t) = A_inf + (A0 - A_inf) * exp(-k*t)
     """
-    return A_inf + (A0 - A_inf) * np.exp(-k * t)
+    exponent = -k * np.asarray(t, dtype=float)
+    return A_inf + (A0 - A_inf) * _safe_exp(exponent)
+
 
 def delayed_first_order_reaction(t, A0, k, A_inf=0, delay=0):
     """
     延迟一级反应方程
     A(t) = A_inf + (A0 - A_inf) * exp(-k*(t-delay)) * H(t-delay)
     """
-    shifted_time = t - delay
+    shifted_time = np.asarray(t, dtype=float) - delay
     mask = shifted_time >= 0
     y = np.full_like(t, A0, dtype=float)
     if np.any(mask):  # 检查是否有时点 >= delay
-        y[mask] = A_inf + (A0 - A_inf) * np.exp(-k * shifted_time[mask])
+        exponent = -k * shifted_time[mask]
+        y[mask] = A_inf + (A0 - A_inf) * _safe_exp(exponent)
     return y
 
 
@@ -58,9 +71,11 @@ class ReactionFitter:
 
 
         try:
-            # 进行曲线拟合
-            popt, pcov = curve_fit(first_order_reaction, time_points_clean, values_clean,
-                                 p0=[A0, k_guess, A_inf], maxfev=5000)
+            # 进行曲线拟合（抑制协方差警告）
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=OptimizeWarning)
+                popt, pcov = curve_fit(first_order_reaction, time_points_clean, values_clean,
+                                     p0=[A0, k_guess, A_inf], maxfev=5000)
             A0_fit, k_fit, A_inf_fit = popt
 
             # 计算拟合优度
@@ -137,15 +152,18 @@ class ReactionFitter:
             lower_bounds = [-1, 1e-6, -1, 0]  # A0, k, A_inf, delay
             upper_bounds = [1, 1e6, 1, time_points_clean[-1]]
 
-            popt, pcov = curve_fit(
-                ReactionFitter.piecewise_delayed_first_order,
-                time_points_clean,
-                values_clean,
-                p0=[A0, k_guess, A_inf, delay_guess],
-                bounds=(lower_bounds, upper_bounds),
-                maxfev=10000,
-                method='trf'  # 使用更稳健的算法
-            )
+            # 抑制协方差警告
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=OptimizeWarning)
+                popt, pcov = curve_fit(
+                    ReactionFitter.piecewise_delayed_first_order,
+                    time_points_clean,
+                    values_clean,
+                    p0=[A0, k_guess, A_inf, delay_guess],
+                    bounds=(lower_bounds, upper_bounds),
+                    maxfev=10000,
+                    method='trf'  # 使用更稳健的算法
+                )
             A0_fit, k_fit, A_inf_fit, delay_fit = popt
 
             # 计算拟合优度
@@ -253,11 +271,12 @@ class ReactionFitter:
     @staticmethod
     def piecewise_delayed_first_order(t, A0, k, A_inf=0, delay=0):
         """分段延迟一级反应方程（延迟期内保持A0）"""
-        shifted_time = t - delay
+        shifted_time = np.asarray(t, dtype=float) - delay
         result = np.full_like(t, A0, dtype=float)
         mask = shifted_time >= 0
         if np.any(mask):
-            result[mask] = A_inf + (A0 - A_inf) * np.exp(-k * shifted_time[mask])
+            exponent = -k * shifted_time[mask]
+            result[mask] = A_inf + (A0 - A_inf) * _safe_exp(exponent)
         return result
 
 

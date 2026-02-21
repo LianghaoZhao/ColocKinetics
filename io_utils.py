@@ -34,24 +34,46 @@ class ImageReader:
 
 def load_mask(mask_path: str) -> np.ndarray:
     """
-    加载蒙版并确保其为整数类型
+    加载蒸版并确保其为整数类型
     Parameters:
-    - mask_path: 蒙版文件路径
+    - mask_path: 蒸版文件路径
     Returns:
-    - 整数类型的蒙版数组
+    - 整数类型的蒸版数组
     """
     if mask_path.endswith(('.npy', '.npz')):
-        mask = np.load(mask_path, allow_pickle=True)
+        data = np.load(mask_path, allow_pickle=True)
+        
+        # Cellpose _seg.npy 格式：字典，包含 'masks' 键
+        if isinstance(data, np.ndarray) and data.dtype == object:
+            # 尝试从字典中提取 masks
+            if data.shape == ():
+                data_dict = data.item()
+                if isinstance(data_dict, dict):
+                    if 'masks' in data_dict:
+                        mask = data_dict['masks']
+                    elif 'outlines' in data_dict:
+                        # 如果没有 masks 但有 outlines，报错
+                        raise ValueError(f"Mask file {mask_path} contains outlines but no masks")
+                    else:
+                        raise ValueError(f"Mask file {mask_path} is a dict but has no 'masks' key. Keys: {list(data_dict.keys())}")
+                else:
+                    raise ValueError(f"Mask file {mask_path} has unexpected format: {type(data_dict)}")
+            else:
+                raise ValueError(f"Mask file {mask_path} has unexpected shape: {data.shape}")
+        else:
+            mask = data
     else:
         # 使用skimage读取图像
         mask = io.imread(mask_path)
-        # 检查是否为整数类型
-        if mask.dtype.kind not in ['u', 'i']:  # 不是无符号整数或有符号整数
-            raise ValueError(f"Mask file {mask_path} is not integer type. Got dtype: {mask.dtype}")
-
+    
     # 确保是整数类型
     if mask.dtype.kind not in ['u', 'i']:  # 不是无符号整数或有符号整数
-        raise ValueError(f"Mask file {mask_path} is not integer type. Got dtype: {mask.dtype}")
+        # 尝试转换为整数
+        try:
+            mask = mask.astype(np.int32)
+        except:
+            raise ValueError(f"Mask file {mask_path} is not integer type. Got dtype: {mask.dtype}")
+    
     return mask
 
 
