@@ -826,7 +826,8 @@ def split_nd2_by_position(image_file, output_dir):
             if 'P' not in sizes or sizes['P'] <= 1:
                 return [image_file]
 
-            axes = f.axes
+            # nd2 库的 sizes 是有序字典，键的顺序就是轴顺序
+            axes = ''.join(sizes.keys())
             if not all(ax in axes for ax in ['T', 'C', 'Y', 'X']):
                 print(f"Multi-position ND2 with unsupported axes {axes}, fallback to original")
                 return [image_file]
