@@ -812,6 +812,61 @@ def create_summary_plot(all_shifts_data, output_dir):
         print(f"Error saving summary plot: {str(e)}")
         plt.close()
 
+def split_nd2_by_position(image_file, output_dir):
+    """如果 ND2 文件包含多个位置 (P 维度 > 1)，将其按视野拆分为多个 TIF 文件。
+    返回用于后续 motioncor 处理的文件列表。
+    """
+    image_path = Path(image_file)
+    if image_path.suffix.lower() != '.nd2':
+        return [image_file]
+
+    try:
+        with nd2.ND2File(str(image_path)) as f:
+            sizes = f.sizes
+            if 'P' not in sizes or sizes['P'] <= 1:
+                return [image_file]
+
+            axes = f.axes
+            if not all(ax in axes for ax in ['T', 'C', 'Y', 'X']):
+                print(f"Multi-position ND2 with unsupported axes {axes}, fallback to original")
+                return [image_file]
+
+            print(f"Detected multi-position ND2: {image_path.name}, P={sizes['P']}")
+            data = f.asarray()
+            p_axis = axes.index('P')
+            base_name = image_path.stem
+
+            split_files = []
+            for p in range(sizes['P']):
+                selector = [slice(None)] * data.ndim
+                selector[p_axis] = p
+                pos_data = data[tuple(selector)]
+
+                # 删除 P 轴后，当前实现只支持 TCYX 顺序
+                pos_axes = axes.replace('P', '')
+                if pos_axes != 'TCYX':
+                    print(f"Multi-position ND2 axes {axes} (after removing P: {pos_axes}) not supported for splitting, fallback to original")
+                    return [image_file]
+
+                out_name = f"{base_name}_P{p}.tif"
+                out_path = Path(output_dir) / out_name
+
+                tifffile.imwrite(
+                    str(out_path),
+                    pos_data,
+                    ome=True,
+                    metadata={'axes': 'TCYX'}
+                )
+                split_files.append(str(out_path))
+
+            print(f"Split {image_path.name} into {len(split_files)} positions")
+            return split_files
+    except Exception as e:
+        print(f"Error splitting ND2 file {image_path.name}: {e}")
+        return [image_file]
+
+
+
 def main():
     parser = argparse.ArgumentParser(description='ND2/TIF Motion Correction Tool with GPU acceleration')
     parser.add_argument('input_dir', help='Input directory containing ND2/TIF files')
@@ -853,13 +908,24 @@ def main():
     # 查找所有ND2和TIF文件
     nd2_files = list(input_dir.glob('*.nd2'))
     tif_files = list(input_dir.glob('*.tif')) + list(input_dir.glob('*.tiff'))
-    all_files = nd2_files + tif_files
+
+    n_nd2 = len(nd2_files)
+    n_tif = len(tif_files)
+
+    # 对 ND2 文件进行多视野拆分（如果存在 P 维度）
+    all_files = []
+    for nd2_file in nd2_files:
+        split_files = split_nd2_by_position(str(nd2_file), output_dir)
+        all_files.extend([Path(f) for f in split_files])
+
+    # 直接加入已有的 TIF 文件
+    all_files.extend(tif_files)
 
     if not all_files:
         print(f"No ND2 or TIF files found in {input_dir}")
         return
 
-    print(f"Found {len(all_files)} files to process ({len(nd2_files)} ND2, {len(tif_files)} TIF)")
+    print(f"Found {len(all_files)} sequences to process ({n_nd2} ND2 files, {n_tif} TIF files)")
 
     # 检查GPU可用性
     use_gpu = CUCIM_AVAILABLE and not args.no_gpu

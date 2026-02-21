@@ -42,6 +42,8 @@ from io_utils import MaskFileMatcher
 from plotting import Visualizer
 from cellpose_utils import run_cellpose_on_files, extract_first_frame_from_nd2, find_existing_masks
 from motioncor import process_image_sequence
+import nd2
+import tifffile
 
 
 def find_corrected_files(motioncor_dir, original_files):
@@ -70,6 +72,60 @@ def find_corrected_files(motioncor_dir, original_files):
             corrected.append(orig)
     
     return corrected
+
+
+def split_nd2_by_position(image_file, output_dir):
+    """如果 ND2 文件包含多个位置 (P 维度 > 1)，将其按视野拆分为多个 TIF 文件。
+    返回用于后续 motioncor 处理的文件列表。
+    """
+    image_path = Path(image_file)
+    if image_path.suffix.lower() != '.nd2':
+        return [image_file]
+
+    try:
+        with nd2.ND2File(str(image_path)) as f:
+            sizes = f.sizes
+            if 'P' not in sizes or sizes['P'] <= 1:
+                return [image_file]
+
+            axes = f.axes
+            if not all(ax in axes for ax in ['T', 'C', 'Y', 'X']):
+                print(f"Multi-position ND2 with unsupported axes {axes}, fallback to original")
+                return [image_file]
+
+            print(f"Detected multi-position ND2: {image_path.name}, P={sizes['P']}")
+            data = f.asarray()
+            p_axis = axes.index('P')
+            base_name = image_path.stem
+
+            split_files = []
+            for p in range(sizes['P']):
+                selector = [slice(None)] * data.ndim
+                selector[p_axis] = p
+                pos_data = data[tuple(selector)]
+
+                # 删除 P 轴后，当前实现只支持 TCYX 顺序
+                pos_axes = axes.replace('P', '')
+                if pos_axes != 'TCYX':
+                    print(f"Multi-position ND2 axes {axes} (after removing P: {pos_axes}) not supported for splitting, fallback to original")
+                    return [image_file]
+
+                out_name = f"{base_name}_P{p}.tif"
+                out_path = Path(output_dir) / out_name
+
+                tifffile.imwrite(
+                    str(out_path),
+                    pos_data,
+                    ome=True,
+                    metadata={'axes': 'TCYX'}
+                )
+                split_files.append(str(out_path))
+
+            print(f"Split {image_path.name} into {len(split_files)} positions")
+            return split_files
+    except Exception as e:
+        print(f"Error splitting ND2 file {image_path.name}: {e}")
+        return [image_file]
 
 
 def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=0.5, batch_size=100, use_gpu=True):
@@ -109,23 +165,28 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
     for image_file in files_to_process:
         print(f"\nMotion correction: {Path(image_file).name}")
         try:
-            shifts, corrected_path = process_image_sequence(
-                image_file,
-                str(motioncor_dir),
-                channel_selection='all',
-                save_visualization=True,
-                auto_crop=True,
-                max_iterations=max_iterations,
-                threshold=threshold,
-                batch_size=batch_size,
-                use_gpu=use_gpu
-            )
-            if corrected_path:
-                corrected_files.append(corrected_path)
-                print(f"  -> Corrected: {Path(corrected_path).name}")
-            else:
-                print(f"  -> Motion correction failed, using original")
-                corrected_files.append(image_file)
+            # 如果是多视野 ND2，则先按 P 维度拆分为多个视野文件
+            split_files = split_nd2_by_position(image_file, motioncor_dir)
+
+            for split_file in split_files:
+                print(f"  -> Processing field: {Path(split_file).name}")
+                shifts, corrected_path = process_image_sequence(
+                    split_file,
+                    str(motioncor_dir),
+                    channel_selection='all',
+                    save_visualization=True,
+                    auto_crop=True,
+                    max_iterations=max_iterations,
+                    threshold=threshold,
+                    batch_size=batch_size,
+                    use_gpu=use_gpu
+                )
+                if corrected_path:
+                    corrected_files.append(corrected_path)
+                    print(f"     -> Corrected: {Path(corrected_path).name}")
+                else:
+                    print(f"     -> Motion correction failed, using original {Path(split_file).name}")
+                    corrected_files.append(split_file)
         except Exception as e:
             print(f"  -> Error: {e}, using original")
             corrected_files.append(image_file)
