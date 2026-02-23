@@ -137,25 +137,26 @@ def batch_phase_cross_correlation_gpu(images_batch1, images_batch2, upsample_fac
         traceback.print_exc()
         return batch_phase_cross_correlation_cpu(images_batch1, images_batch2, upsample_factor)
 
-def detect_focus_loss(frames, threshold=0.7):
+def detect_focus_loss(frames, threshold=0.7, background=100.0):
     """
     检测丢焦（信号强度突然持续下降）
     
     Parameters:
     - frames: 图像序列 (T, H, W) 或 (T, C, H, W)
     - threshold: 帧间强度比值阈值，低于此值判定为丢焦
+    - background: 背景信号值，计算强度时扣除
     
     Returns:
     - focus_lost: bool, 是否检测到丢焦
     - focus_loss_frame: int or None, 丢焦开始的帧索引
-    - intensity_ratios: list, 每帧相对前一帧的强度比值
-    - frame_intensities: list, 每帧的平均强度
+    - intensity_ratios: list, 每帧相对前一帧的强度比值（扣除背景后）
+    - frame_intensities: list, 每帧的平均强度（扣除背景后）
     """
-    # 计算每帧的平均强度
+    # 计算每帧的平均强度（扣除背景）
     if frames.ndim == 4:  # (T, C, H, W)
-        frame_intensities = [np.mean(frames[t]) for t in range(len(frames))]
+        frame_intensities = [max(0, np.mean(frames[t]) - background) for t in range(len(frames))]
     else:  # (T, H, W)
-        frame_intensities = [np.mean(frames[t]) for t in range(len(frames))]
+        frame_intensities = [max(0, np.mean(frames[t]) - background) for t in range(len(frames))]
     
     # 计算帧间强度比值
     intensity_ratios = [1.0]  # 第一帧比值设为1
@@ -346,7 +347,8 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
                           sample_interval=1, save_visualization=True, auto_crop=True, 
                           border=0, max_iterations=10, threshold=0.5, 
                           batch_size=100, use_gpu=True, gpu_device=0,
-                          focus_loss_threshold=0.7, skip_focus_loss=True):
+                          focus_loss_threshold=0.7, skip_focus_loss=True,
+                          focus_loss_background=100.0):
     """
     处理图像序列并进行漂移校正
 
@@ -365,6 +367,7 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
     - gpu_device: GPU 设备 ID（默认 0）
     - focus_loss_threshold: 丢焦检测阈值（帧间强度比值，默认0.7）
     - skip_focus_loss: 是否跳过丢焦序列（默认True）
+    - focus_loss_background: 丢焦检测时扣除的背景值（默认100.0）
     
     Returns:
     - cumulative_shifts: 累积漂移数组，如果跳过则为 None
@@ -534,7 +537,7 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
     
     # 丢焦检测
     focus_lost, focus_loss_frame, intensity_ratios, frame_intensities = detect_focus_loss(
-        drift_frames, threshold=focus_loss_threshold
+        drift_frames, threshold=focus_loss_threshold, background=focus_loss_background
     )
     
     focus_loss_info = {

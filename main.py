@@ -187,7 +187,8 @@ def split_nd2_by_position(image_file, output_dir):
 
 def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=0.5, 
                           batch_size=100, use_gpu=True, gpu_device=0,
-                          focus_loss_threshold=0.7, skip_focus_loss=True):
+                          focus_loss_threshold=0.7, skip_focus_loss=True,
+                          focus_loss_background=100.0):
     """
     运行漂移校正（支持增量处理，自动检测已有的校正结果）
     
@@ -243,7 +244,8 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
                     use_gpu=use_gpu,
                     gpu_device=gpu_device,
                     focus_loss_threshold=focus_loss_threshold,
-                    skip_focus_loss=skip_focus_loss
+                    skip_focus_loss=skip_focus_loss,
+                    focus_loss_background=focus_loss_background
                 )
                 
                 # 记录丢焦信息
@@ -354,6 +356,8 @@ def main():
                        help='Motion correction: focus loss detection threshold (frame intensity ratio, default: 0.7)')
     parser.add_argument('--mc-no-skip-focus-loss', action='store_true',
                        help='Motion correction: do not skip sequences with focus loss')
+    parser.add_argument('--mc-focus-loss-background', type=float, default=100.0,
+                       help='Motion correction: background value to subtract for focus loss detection (default: 100)')
     
     # Cellpose 参数
     parser.add_argument('--cp-diameter', type=int, default=380,
@@ -459,7 +463,8 @@ def main():
             use_gpu=not args.mc_no_gpu,
             gpu_device=args.gpu,
             focus_loss_threshold=args.mc_focus_loss_threshold,
-            skip_focus_loss=not args.mc_no_skip_focus_loss
+            skip_focus_loss=not args.mc_no_skip_focus_loss,
+            focus_loss_background=args.mc_focus_loss_background
         )
         
         # 打印丢焦汇总
