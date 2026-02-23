@@ -185,18 +185,22 @@ def split_nd2_by_position(image_file, output_dir):
         return [image_file]
 
 
-def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=0.5, batch_size=100, use_gpu=True, gpu_device=0):
+def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=0.5, 
+                          batch_size=100, use_gpu=True, gpu_device=0,
+                          focus_loss_threshold=0.7, skip_focus_loss=True):
     """
     运行漂移校正（支持增量处理，自动检测已有的校正结果）
     
     Returns:
-    - 校正后的文件路径列表
+    - corrected_files: 校正后的文件路径列表
+    - focus_loss_records: 丢焦记录列表
     """
     motioncor_dir = Path(output_dir) / 'motioncor'
     motioncor_dir.mkdir(parents=True, exist_ok=True)
     
     corrected_files = []
     files_to_process = []
+    focus_loss_records = []  # 记录丢焦的序列
     
     # 检测已有的校正结果
     for image_file in image_files:
@@ -214,7 +218,7 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
     
     if not files_to_process:
         print("All files already have motion correction results")
-        return corrected_files
+        return corrected_files, focus_loss_records
     
     print(f"\nProcessing {len(files_to_process)} files...")
     
@@ -227,7 +231,7 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
 
             for split_file in split_files:
                 print(f"  -> Processing field: {Path(split_file).name}")
-                shifts, corrected_path = process_image_sequence(
+                shifts, corrected_path, focus_loss_info = process_image_sequence(
                     split_file,
                     str(motioncor_dir),
                     channel_selection='all',
@@ -237,8 +241,15 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
                     threshold=threshold,
                     batch_size=batch_size,
                     use_gpu=use_gpu,
-                    gpu_device=gpu_device
+                    gpu_device=gpu_device,
+                    focus_loss_threshold=focus_loss_threshold,
+                    skip_focus_loss=skip_focus_loss
                 )
+                
+                # 记录丢焦信息
+                if focus_loss_info and focus_loss_info.get('focus_lost', False):
+                    focus_loss_records.append(focus_loss_info)
+                
                 if corrected_path:
                     corrected_files.append(corrected_path)
                     print(f"     -> Corrected: {Path(corrected_path).name}")
@@ -249,7 +260,7 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
             print(f"  -> Error: {e}, using original")
             corrected_files.append(image_file)
     
-    return corrected_files
+    return corrected_files, focus_loss_records
 
 
 def run_cellpose_segmentation(image_files, output_dir, diameter=380, gpu_device=0, use_gpu=True, niter=None, cp_channel_wavelength=None, gamma=0.5, batch_size=10):
@@ -339,6 +350,10 @@ def main():
                        help='Motion correction: GPU batch size (default: 100, recommended 50-200)')
     parser.add_argument('--mc-no-gpu', action='store_true',
                        help='Motion correction: disable GPU acceleration')
+    parser.add_argument('--mc-focus-loss-threshold', type=float, default=0.7,
+                       help='Motion correction: focus loss detection threshold (frame intensity ratio, default: 0.7)')
+    parser.add_argument('--mc-no-skip-focus-loss', action='store_true',
+                       help='Motion correction: do not skip sequences with focus loss')
     
     # Cellpose 参数
     parser.add_argument('--cp-diameter', type=int, default=380,
@@ -435,15 +450,31 @@ def main():
         print("Step 1: Motion Correction")
         print("=" * 60)
         
-        corrected_files = run_motion_correction(
+        corrected_files, focus_loss_records = run_motion_correction(
             image_files,
             output_dir,
             max_iterations=args.mc_max_iterations,
             threshold=args.mc_threshold,
             batch_size=args.mc_batch_size,
             use_gpu=not args.mc_no_gpu,
-            gpu_device=args.gpu
+            gpu_device=args.gpu,
+            focus_loss_threshold=args.mc_focus_loss_threshold,
+            skip_focus_loss=not args.mc_no_skip_focus_loss
         )
+        
+        # 打印丢焦汇总
+        if focus_loss_records:
+            print("\n" + "-" * 40)
+            print(f"FOCUS LOSS SUMMARY: {len(focus_loss_records)} sequences skipped")
+            print("-" * 40)
+            for info in focus_loss_records:
+                frame = info['focus_loss_frame']
+                total = info['total_frames']
+                ratio = info['intensity_ratios'][frame] if frame else 0
+                print(f"  - {Path(info['file']).name}")
+                print(f"    Frame {frame}/{total}, intensity ratio: {ratio:.3f}")
+            print("-" * 40)
+        
         # 使用校正后的文件进行后续分析
         analysis_files = corrected_files
         print(f"\nMotion correction completed: {len(corrected_files)} files")

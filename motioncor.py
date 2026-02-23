@@ -137,6 +137,46 @@ def batch_phase_cross_correlation_gpu(images_batch1, images_batch2, upsample_fac
         traceback.print_exc()
         return batch_phase_cross_correlation_cpu(images_batch1, images_batch2, upsample_factor)
 
+def detect_focus_loss(frames, threshold=0.7):
+    """
+    检测丢焦（信号强度突然持续下降）
+    
+    Parameters:
+    - frames: 图像序列 (T, H, W) 或 (T, C, H, W)
+    - threshold: 帧间强度比值阈值，低于此值判定为丢焦
+    
+    Returns:
+    - focus_lost: bool, 是否检测到丢焦
+    - focus_loss_frame: int or None, 丢焦开始的帧索引
+    - intensity_ratios: list, 每帧相对前一帧的强度比值
+    - frame_intensities: list, 每帧的平均强度
+    """
+    # 计算每帧的平均强度
+    if frames.ndim == 4:  # (T, C, H, W)
+        frame_intensities = [np.mean(frames[t]) for t in range(len(frames))]
+    else:  # (T, H, W)
+        frame_intensities = [np.mean(frames[t]) for t in range(len(frames))]
+    
+    # 计算帧间强度比值
+    intensity_ratios = [1.0]  # 第一帧比值设为1
+    focus_lost = False
+    focus_loss_frame = None
+    
+    for t in range(1, len(frame_intensities)):
+        if frame_intensities[t-1] > 0:
+            ratio = frame_intensities[t] / frame_intensities[t-1]
+        else:
+            ratio = 1.0
+        intensity_ratios.append(ratio)
+        
+        # 检测丢焦
+        if not focus_lost and ratio < threshold:
+            focus_lost = True
+            focus_loss_frame = t
+    
+    return focus_lost, focus_loss_frame, intensity_ratios, frame_intensities
+
+
 def crop_to_valid_region(frames, cumulative_shifts, border=0):
     """
     根据漂移信息裁剪图像，确保所有帧都保持在原始视野内
@@ -305,7 +345,8 @@ def iterative_drift_correction(frames, max_iterations=10, threshold=0.5,
 def process_image_sequence(input_path, output_dir, channel_selection='all',
                           sample_interval=1, save_visualization=True, auto_crop=True, 
                           border=0, max_iterations=10, threshold=0.5, 
-                          batch_size=100, use_gpu=True, gpu_device=0):
+                          batch_size=100, use_gpu=True, gpu_device=0,
+                          focus_loss_threshold=0.7, skip_focus_loss=True):
     """
     处理图像序列并进行漂移校正
 
@@ -322,6 +363,13 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
     - batch_size: 批处理大小
     - use_gpu: 是否使用GPU
     - gpu_device: GPU 设备 ID（默认 0）
+    - focus_loss_threshold: 丢焦检测阈值（帧间强度比值，默认0.7）
+    - skip_focus_loss: 是否跳过丢焦序列（默认True）
+    
+    Returns:
+    - cumulative_shifts: 累积漂移数组，如果跳过则为 None
+    - corrected_tiff_path: 校正后的文件路径，如果跳过则为 None
+    - focus_loss_info: 丢焦检测信息字典
     """
     
     # 设置 GPU 设备
@@ -389,7 +437,7 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
 
         except Exception as e:
             print(f"Error reading ND2 file {input_path}: {str(e)}")
-            return None, None
+            return None, None, None
 
     elif input_path.suffix.lower() in ['.tif', '.tiff']:
         # 读取TIF文件
@@ -475,14 +523,39 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
                     raise ValueError(f"Unsupported TIF file dimensions: {all_frames.ndim}")
         except Exception as e:
             print(f"Error reading TIF file {input_path}: {str(e)}")
-            return None, None
+            return None, None, None
     else:
         raise ValueError(f"Unsupported file format: {input_path.suffix}")
 
     # 验证数据
     if original_frames is None or original_frames.size == 0:
         print(f"Error: No data read from {input_path}")
-        return None, None
+        return None, None, None
+    
+    # 丢焦检测
+    focus_lost, focus_loss_frame, intensity_ratios, frame_intensities = detect_focus_loss(
+        drift_frames, threshold=focus_loss_threshold
+    )
+    
+    focus_loss_info = {
+        'file': str(input_path),
+        'focus_lost': focus_lost,
+        'focus_loss_frame': focus_loss_frame,
+        'total_frames': len(drift_frames),
+        'intensity_ratios': intensity_ratios,
+        'frame_intensities': frame_intensities,
+        'threshold': focus_loss_threshold
+    }
+    
+    if focus_lost:
+        if focus_loss_frame is not None:
+            ratio_at_loss = intensity_ratios[focus_loss_frame]
+            print(f"WARNING: Focus loss detected at frame {focus_loss_frame} "
+                  f"(intensity ratio: {ratio_at_loss:.3f} < {focus_loss_threshold})")
+        
+        if skip_focus_loss:
+            print(f"Skipping sequence due to focus loss: {input_path}")
+            return None, None, focus_loss_info
 
     # 执行迭代漂移校正 - 只计算漂移，不应用
     try:
@@ -492,7 +565,7 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
         )
     except Exception as e:
         print(f"Error in drift correction for {input_path}: {str(e)}")
-        return None, None
+        return None, None, focus_loss_info
 
     # 应用漂移到原始的每个通道（批处理）
     print("Applying calculated drift to original frames...")
@@ -503,7 +576,7 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
                                             batch_size)
     except Exception as e:
         print(f"Error applying drift correction: {str(e)}")
-        return None, None
+        return None, None, focus_loss_info
 
     # 如果启用自动裁剪，需要对多通道数据进行裁剪
     if auto_crop:
@@ -609,9 +682,9 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
         print(f"Corrected data saved to: {corrected_tiff_path}")
     except Exception as e:
         print(f"Error saving corrected data: {str(e)}")
-        return cumulative_shifts, None
+        return cumulative_shifts, None, focus_loss_info
 
-    return cumulative_shifts, corrected_tiff_path
+    return cumulative_shifts, corrected_tiff_path, focus_loss_info
 
 def create_drift_visualization(cumulative_shifts, output_dir, base_name, sample_interval=1):
     """创建漂移轨迹的可视化"""
@@ -909,6 +982,10 @@ def main():
                        help='Batch size for GPU processing (default: 100, recommended 50-200)')
     parser.add_argument('--no_gpu', action='store_true',
                        help='Disable GPU acceleration')
+    parser.add_argument('--focus_loss_threshold', type=float, default=0.7,
+                       help='Threshold for focus loss detection (frame intensity ratio, default: 0.7)')
+    parser.add_argument('--no_skip_focus_loss', action='store_true',
+                       help='Do not skip sequences with focus loss (process anyway)')
 
     args = parser.parse_args()
 
@@ -953,11 +1030,15 @@ def main():
 
     # 存储所有文件的漂移数据
     all_shifts_data = []
+    
+    # 存储丢焦信息
+    focus_loss_records = []  # 记录丢焦的序列
+    processed_records = []   # 记录成功处理的序列
 
     for file_path in all_files:
         try:
             print(f"\nProcessing file: {file_path.name}")
-            shifts, output_path = process_image_sequence(
+            shifts, output_path, focus_loss_info = process_image_sequence(
                 str(file_path),
                 str(output_dir),
                 channel_selection=args.channel,
@@ -968,12 +1049,28 @@ def main():
                 max_iterations=args.max_iterations,
                 threshold=args.threshold,
                 batch_size=args.batch_size,
-                use_gpu=use_gpu
+                use_gpu=use_gpu,
+                focus_loss_threshold=args.focus_loss_threshold,
+                skip_focus_loss=not args.no_skip_focus_loss
             )
+            
+            # 记录丢焦信息
+            if focus_loss_info and focus_loss_info.get('focus_lost', False):
+                focus_loss_records.append(focus_loss_info)
 
             if shifts is not None and output_path is not None:
                 # 添加到总结数据中
                 all_shifts_data.append((str(file_path), shifts))
+                
+                # 记录成功处理
+                processed_records.append({
+                    'file': str(file_path),
+                    'output': str(output_path),
+                    'max_x_drift': float(np.max(np.abs(shifts[:, 0]))),
+                    'max_y_drift': float(np.max(np.abs(shifts[:, 1]))),
+                    'final_x_drift': float(shifts[-1, 0]),
+                    'final_y_drift': float(shifts[-1, 1])
+                })
 
                 # 打印统计信息
                 total_x_drift = np.abs(shifts[-1, 0])
@@ -1001,6 +1098,74 @@ def main():
         print(f"Created summary plot for {len(all_shifts_data)} files")
     else:
         print(f"No successful files processed for summary plot. Total attempted: {len(all_files)}, Successful: {len(all_shifts_data)}")
+    
+    # 生成汇总报告
+    create_processing_report(
+        output_dir, 
+        all_files, 
+        processed_records, 
+        focus_loss_records,
+        args
+    )
+
+
+def create_processing_report(output_dir, all_files, processed_records, focus_loss_records, args):
+    """生成处理汇总报告"""
+    report = {
+        'processing_time': datetime.now().isoformat(),
+        'total_files': len(all_files),
+        'processed_count': len(processed_records),
+        'focus_loss_count': len(focus_loss_records),
+        'parameters': {
+            'channel': args.channel,
+            'max_iterations': args.max_iterations,
+            'threshold': args.threshold,
+            'batch_size': args.batch_size,
+            'auto_crop': not args.no_auto_crop,
+            'border': args.border,
+            'focus_loss_threshold': args.focus_loss_threshold,
+            'skip_focus_loss': not args.no_skip_focus_loss
+        },
+        'processed_files': processed_records,
+        'focus_loss_files': []
+    }
+    
+    # 添加丢焦文件的详细信息
+    for info in focus_loss_records:
+        report['focus_loss_files'].append({
+            'file': info['file'],
+            'focus_loss_frame': info['focus_loss_frame'],
+            'total_frames': info['total_frames'],
+            'intensity_ratio_at_loss': info['intensity_ratios'][info['focus_loss_frame']] if info['focus_loss_frame'] else None
+        })
+    
+    # 保存报告
+    report_path = Path(output_dir) / 'processing_report.json'
+    try:
+        with open(report_path, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        print(f"\nProcessing report saved to: {report_path}")
+    except Exception as e:
+        print(f"Error saving report: {e}")
+    
+    # 打印汇总信息
+    print("\n" + "="*60)
+    print("PROCESSING SUMMARY")
+    print("="*60)
+    print(f"Total files:      {len(all_files)}")
+    print(f"Processed:        {len(processed_records)}")
+    print(f"Focus loss:       {len(focus_loss_records)}")
+    
+    if focus_loss_records:
+        print("\nFocus loss files:")
+        for info in focus_loss_records:
+            frame = info['focus_loss_frame']
+            total = info['total_frames']
+            ratio = info['intensity_ratios'][frame] if frame else 0
+            print(f"  - {Path(info['file']).name}")
+            print(f"    Frame {frame}/{total}, intensity ratio: {ratio:.3f}")
+    
+    print("="*60)
 
 if __name__ == "__main__":
     main()
