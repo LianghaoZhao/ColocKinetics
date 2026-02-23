@@ -492,6 +492,12 @@ def main():
     print("\n" + "=" * 60)
     print("Step 3: Co-localization Analysis")
     print("=" * 60)
+    
+    # 显示分析参数
+    if args.skip_initial_frames > 0:
+        print(f"\nSkip initial frames: {args.skip_initial_frames}")
+        print(f"  -> First {args.skip_initial_frames} time points will be excluded from fitting")
+        print(f"  -> These points will be shown in gray color in plots")
 
     # 创建分析器
     analyzer = MainAnalyzer()

@@ -60,8 +60,17 @@ class MainAnalyzer:
                 # 构建 time_point -> (corr, p_val) 的映射
                 cell_correlations[cell_id] = {t: (c, p) for t, c, p in zip(time_points, correlations, p_values)}
             
+            # 预先计算每个cell_id的有效时间点集合（跳过前N帧后的）
+            valid_timepoints_per_cell = {}
+            for cell_id, cell_list in file.cells.items():
+                sorted_cells = sorted(cell_list, key=lambda c: c.time_point)
+                valid_timepoints_per_cell[cell_id] = {
+                    c.time_point for idx, c in enumerate(sorted_cells) if idx >= file.skip_initial_frames
+                }
+            
             for cell in file.all_cells:
-                if cell.time_point >= file.skip_initial_frames:
+                # 检查该时间点是否在有效集合中
+                if cell.time_point in valid_timepoints_per_cell.get(cell.cell_id, set()):
                     # 直接查找预计算的结果
                     corr_map = cell_correlations.get(cell.cell_id, {})
                     corr_val, p_val = corr_map.get(cell.time_point, (np.nan, np.nan))

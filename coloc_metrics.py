@@ -10,14 +10,16 @@ class CoLocalizationMetrics:
 
     @staticmethod
     def get_correlation_over_time_of_a_cell(analysis: FileData, cell_id: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """获取指定细胞的相关系数随时间的变化 (from CellData)"""
+        """获取指定细胞的相关系数随时间的变化 (from CellData)，只返回有效点（跳过前N帧后的）"""
         if cell_id not in analysis.cells:
             raise ValueError(f"Cell {cell_id} not found")
         time_points = []
         correlations = []
         p_values = []
-        for cell_data in analysis.cells[cell_id]:
-            if cell_data.time_point >= analysis.skip_initial_frames:  # 跳过初始帧
+        # 按时间排序后跳过前N帧（而不是按时间值过滤）
+        sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
+        for idx, cell_data in enumerate(sorted_cells):
+            if idx >= analysis.skip_initial_frames:  # 跳过前N帧
                 time_points.append(cell_data.time_point)
                 corr, p_val = CoLocalizationMetrics._calculate_single_timepoint_correlation(
                     cell_data.intensity1, cell_data.intensity2
@@ -25,6 +27,35 @@ class CoLocalizationMetrics:
                 correlations.append(corr)
                 p_values.append(p_val)
         return np.array(time_points), np.array(correlations), np.array(p_values)
+
+    @staticmethod
+    def get_all_correlations_with_skip_mask(analysis: FileData, cell_id: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """获取指定细胞所有时间点的相关系数（包括跳过的），并返回跳过标记
+        
+        Returns:
+        - time_points: 所有时间点
+        - correlations: 所有相关系数
+        - p_values: 所有p值
+        - is_skipped: 布尔数组，True表示该点被跳过（不参与拟合）
+        """
+        if cell_id not in analysis.cells:
+            raise ValueError(f"Cell {cell_id} not found")
+        time_points = []
+        correlations = []
+        p_values = []
+        is_skipped = []
+        
+        sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
+        for idx, cell_data in enumerate(sorted_cells):
+            time_points.append(cell_data.time_point)
+            corr, p_val = CoLocalizationMetrics._calculate_single_timepoint_correlation(
+                cell_data.intensity1, cell_data.intensity2
+            )
+            correlations.append(corr)
+            p_values.append(p_val)
+            is_skipped.append(idx < analysis.skip_initial_frames)
+        
+        return np.array(time_points), np.array(correlations), np.array(p_values), np.array(is_skipped)
 
     @staticmethod
     def _calculate_single_timepoint_correlation(intensity1: np.ndarray, intensity2: np.ndarray) -> Tuple[float, float]:
@@ -49,8 +80,10 @@ class CoLocalizationMetrics:
             ch1_values = []
             ch2_values = []
 
-            for cell_data in cell_list:
-                if cell_data.time_point >= analysis.skip_initial_frames:
+            # 按时间排序后跳过前N帧（而不是按时间值过滤）
+            sorted_cells = sorted(cell_list, key=lambda c: c.time_point)
+            for idx, cell_data in enumerate(sorted_cells):
+                if idx >= analysis.skip_initial_frames:  # 跳过前N帧
                     # Calculate correlation for this specific time point
                     corr, p_val = CoLocalizationMetrics._calculate_single_timepoint_correlation(
                         cell_data.intensity1, cell_data.intensity2

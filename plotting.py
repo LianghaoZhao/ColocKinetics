@@ -71,17 +71,25 @@ class Visualizer:
         # 预先计算所有细胞的指标（避免在循环中重复计算）
         all_cell_metrics = CoLocalizationMetrics.calculate_metrics_for_file(analysis)
         
+        # 输出跳过帧数的诊断信息（仅对第一个文件的第一个细胞）
+        if analysis.skip_initial_frames > 0:
+            first_cell_id = all_cell_ids[0] if all_cell_ids else None
+            if first_cell_id is not None:
+                _, _, _, first_is_skipped = CoLocalizationMetrics.get_all_correlations_with_skip_mask(analysis, first_cell_id)
+                n_skipped = np.sum(first_is_skipped)
+                print(f"  [DEBUG] File: {original_filename}, skip_initial_frames={analysis.skip_initial_frames}, actually skipped={n_skipped} points")
+                
         # 为每个细胞绘制相关系数随时间变化的图
         for idx, cell_id in enumerate(all_cell_ids):
+            # 获取所有点（包括跳过的）用于绑图
+            all_time, all_corr, all_pval, is_skipped = CoLocalizationMetrics.get_all_correlations_with_skip_mask(analysis, cell_id)
+                    
+            # 获取有效点用于拟合
             cell_metrics = all_cell_metrics[cell_id]
             time_points = cell_metrics['time_points']
             correlations = cell_metrics['correlations']
-            p_values = cell_metrics['p_values']
-            fit_results = ReactionFitter.fit_first_order_reaction if fit_model == 'first_order' else ReactionFitter.fit_delayed_first_order_reaction
-            # This is complex, as fit_results is from the KineticsAnalyzer. We need to get it.
-            # A better way is to pass fit results from the main process or re-calculate here.
-            # Let's re-calculate the fit for the cell within the plotting function.
-            # Calculate fit
+                    
+            # 计算拟合
             valid_corr_mask = ~np.isnan(correlations)
             if np.sum(valid_corr_mask) >= 3:
                  fit_results = ReactionFitter.fit_first_order_reaction(time_points[valid_corr_mask], correlations[valid_corr_mask]) if fit_model == 'first_order' else ReactionFitter.fit_delayed_first_order_reaction(time_points[valid_corr_mask], correlations[valid_corr_mask])
@@ -90,16 +98,29 @@ class Visualizer:
                      'A0': np.nan, 'k': np.nan, 'A_inf': np.nan, 't50': np.nan, 't90': np.nan, 'r_squared': np.nan,
                      'delay': np.nan if fit_model == 'delayed_first_order' else None
                  }
-
+        
             ax = axes[idx]
-            ax.plot(time_points, correlations, 'o-', label='Correlation', linewidth=2, markersize=6)
-
+                    
+            # 分开绘制跳过的点（灰色）和有效的点（蓝色）
+            skipped_mask = is_skipped
+            valid_mask = ~is_skipped
+                    
+            # 先绘制跳过的点（灰色，无连线）
+            if np.any(skipped_mask):
+                ax.plot(all_time[skipped_mask], all_corr[skipped_mask], 'o', 
+                       color='gray', markersize=6, alpha=0.5, label='Skipped')
+                    
+            # 绘制有效的点（蓝色，有连线）
+            if np.any(valid_mask):
+                ax.plot(all_time[valid_mask], all_corr[valid_mask], 'o-', 
+                       color='C0', linewidth=2, markersize=6, label='Correlation')
+        
             # 选择拟合函数
             fit_func = delayed_first_order_reaction if fit_model == 'delayed_first_order' else first_order_reaction
 
             # 绘制拟合曲线
             if not np.isnan(fit_results['k']) and fit_results['k'] > 0:
-                t_fit = np.linspace(time_points.min(), time_points.max(), 100)
+                t_fit = np.linspace(all_time.min(), all_time.max(), 100)
                 if fit_model == 'delayed_first_order':
                     y_fit = fit_func(t_fit, fit_results['A0'],
                                     fit_results['k'], fit_results['A_inf'],
@@ -141,6 +162,11 @@ class Visualizer:
     def _plot_single_cell_detailed(self, analysis: FileData, cell_id: int, fit_model: str, include_scatter: bool):
         """为单个细胞生成详细分析图"""
         original_filename = Path(analysis.file_path).stem
+        
+        # 获取所有点（包括跳过的）用于绑图
+        all_time, all_corr, all_pval, is_skipped = CoLocalizationMetrics.get_all_correlations_with_skip_mask(analysis, cell_id)
+        
+        # 获取有效点用于拟合
         time_points, correlations, p_values = CoLocalizationMetrics.get_correlation_over_time_of_a_cell(analysis, cell_id)
 
         # Re-calculate fit for this specific cell
@@ -153,7 +179,11 @@ class Visualizer:
                  'delay': np.nan if fit_model == 'delayed_first_order' else None
              }
 
-        # Get intensity data and fit for channels
+        # Get intensity data and fit for channels (包括跳过的点)
+        ch1_time_all, ch1_values_all, ch1_skipped = self._get_all_intensity_over_time(analysis, cell_id, 'channel1')
+        ch2_time_all, ch2_values_all, ch2_skipped = self._get_all_intensity_over_time(analysis, cell_id, 'channel2')
+        
+        # 获取有效的强度数据用于拟合
         ch1_time, ch1_values = self._get_intensity_over_time(analysis, cell_id, 'channel1')
         ch2_time, ch2_values = self._get_intensity_over_time(analysis, cell_id, 'channel2')
 
@@ -181,9 +211,18 @@ class Visualizer:
 
         # 1. Correlation vs Time
         ax1 = axes[0, 0] if include_scatter else axes[0, 0]
-        ax1.plot(time_points, correlations, 'o-', label='Correlation', linewidth=2, markersize=6)
+        # 分开绘制跳过的点和有效的点
+        skipped_mask = is_skipped
+        valid_mask = ~is_skipped
+        if np.any(skipped_mask):
+            ax1.plot(all_time[skipped_mask], all_corr[skipped_mask], 'o', 
+                    color='gray', markersize=6, alpha=0.5, label='Skipped')
+        if np.any(valid_mask):
+            ax1.plot(all_time[valid_mask], all_corr[valid_mask], 'o-', 
+                    color='C0', linewidth=2, markersize=6, label='Correlation')
+        
         if not np.isnan(corr_fit_results['k']) and corr_fit_results['k'] > 0:
-            t_fit = np.linspace(time_points.min(), time_points.max(), 100)
+            t_fit = np.linspace(all_time.min(), all_time.max(), 100)
             fit_func = delayed_first_order_reaction if fit_model == 'delayed_first_order' else first_order_reaction
             y_fit = fit_func(t_fit, corr_fit_results['A0'], corr_fit_results['k'], corr_fit_results['A_inf'], corr_fit_results.get('delay', 0))
             ax1.plot(t_fit, y_fit, '--', label='Fitted curve', color='red', linewidth=2)
@@ -203,7 +242,13 @@ class Visualizer:
 
         # 2. P-value vs Time
         ax2 = axes[0, 1] if include_scatter else axes[0, 1]
-        ax2.plot(time_points, p_values, 's-', color='red', linewidth=2, markersize=6)
+        # 分开绘制跳过的点和有效的点
+        if np.any(skipped_mask):
+            ax2.plot(all_time[skipped_mask], all_pval[skipped_mask], 's', 
+                    color='gray', markersize=6, alpha=0.5, label='Skipped')
+        if np.any(valid_mask):
+            ax2.plot(all_time[valid_mask], all_pval[valid_mask], 's-', 
+                    color='red', linewidth=2, markersize=6, label='P-value')
         ax2.set_xlabel('Time (s)')
         ax2.set_ylabel('P-value')
         ax2.set_yscale('log')
@@ -212,9 +257,15 @@ class Visualizer:
 
         # 3. Channel 1 Intensity vs Time
         ax3 = axes[1, 0] if include_scatter else axes[1, 0]
-        ax3.plot(ch1_time, ch1_values, 'o-', label='Channel 1', linewidth=2, markersize=6)
+        # 分开绘制跳过的点和有效的点
+        if np.any(ch1_skipped):
+            ax3.plot(ch1_time_all[ch1_skipped], ch1_values_all[ch1_skipped], 'o', 
+                    color='gray', markersize=6, alpha=0.5, label='Skipped')
+        if np.any(~ch1_skipped):
+            ax3.plot(ch1_time_all[~ch1_skipped], ch1_values_all[~ch1_skipped], 'o-', 
+                    label='Channel 1', linewidth=2, markersize=6)
         if not np.isnan(ch1_fit_results['k']) and ch1_fit_results['k'] > 0:
-            t_fit = np.linspace(ch1_time.min(), ch1_time.max(), 100)
+            t_fit = np.linspace(ch1_time_all.min(), ch1_time_all.max(), 100)
             y_fit = fit_func(t_fit, ch1_fit_results['A0'], ch1_fit_results['k'], ch1_fit_results['A_inf'], ch1_fit_results.get('delay', 0))
             ax3.plot(t_fit, y_fit, '--', label='Fitted curve', color='red', linewidth=2)
         ax3.set_xlabel('Time (s)')
@@ -228,9 +279,15 @@ class Visualizer:
 
         # 4. Channel 2 Intensity vs Time
         ax4 = axes[1, 1] if include_scatter else axes[1, 1]
-        ax4.plot(ch2_time, ch2_values, 'o-', label='Channel 2', linewidth=2, markersize=6, color='green')
+        # 分开绘制跳过的点和有效的点
+        if np.any(ch2_skipped):
+            ax4.plot(ch2_time_all[ch2_skipped], ch2_values_all[ch2_skipped], 'o', 
+                    color='gray', markersize=6, alpha=0.5, label='Skipped')
+        if np.any(~ch2_skipped):
+            ax4.plot(ch2_time_all[~ch2_skipped], ch2_values_all[~ch2_skipped], 'o-', 
+                    label='Channel 2', linewidth=2, markersize=6, color='green')
         if not np.isnan(ch2_fit_results['k']) and ch2_fit_results['k'] > 0:
-            t_fit = np.linspace(ch2_time.min(), ch2_time.max(), 100)
+            t_fit = np.linspace(ch2_time_all.min(), ch2_time_all.max(), 100)
             y_fit = fit_func(t_fit, ch2_fit_results['A0'], ch2_fit_results['k'], ch2_fit_results['A_inf'], ch2_fit_results.get('delay', 0))
             ax4.plot(t_fit, y_fit, '--', label='Fitted curve', color='red', linewidth=2)
         ax4.set_xlabel('Time (s)')
@@ -246,7 +303,10 @@ class Visualizer:
         if include_scatter:
             ax5 = axes[2, 0]
             # Get data from first timepoint after skip_initial_frames for this cell
-            first_time_data = next((cd for cd in analysis.all_cells if cd.cell_id == cell_id and cd.time_point >= analysis.skip_initial_frames), None)
+            # 按时间排序后取第N帧的数据
+            cell_data_list = [cd for cd in analysis.all_cells if cd.cell_id == cell_id]
+            sorted_cell_data = sorted(cell_data_list, key=lambda c: c.time_point)
+            first_time_data = sorted_cell_data[analysis.skip_initial_frames] if len(sorted_cell_data) > analysis.skip_initial_frames else None
             if first_time_data:
                 mask = ~(np.isnan(first_time_data.intensity1) | np.isnan(first_time_data.intensity2))
                 ch1_clean = first_time_data.intensity1[mask]
@@ -320,12 +380,9 @@ class Visualizer:
             skip_frames = analysis.skip_initial_frames
                 
             for cell_id, cell_list in analysis.cells.items():
-                # 获取第一个有效时间点的数据
-                first_cell_data = None
-                for cd in cell_list:
-                    if cd.time_point >= skip_frames:
-                        first_cell_data = cd
-                        break
+                # 获取第一个有效时间点的数据（按时间排序后跳过前N帧）
+                sorted_cells = sorted(cell_list, key=lambda c: c.time_point)
+                first_cell_data = sorted_cells[skip_frames] if len(sorted_cells) > skip_frames else None
                     
                 if first_cell_data is None:
                     continue
@@ -367,6 +424,7 @@ class Visualizer:
                     'red': red_value,
                     'green': green_value,
                     'ratio': ratio,
+                    'n_pixels': first_cell_data.n_pixels,  # 细胞面积（像素数）
                     't50': t50
                 })
             
@@ -379,20 +437,54 @@ class Visualizer:
         green_values = np.array([d['green'] for d in ratio_data])
         ratio_values = np.array([d['ratio'] for d in ratio_data])
         t50_values = np.array([d['t50'] for d in ratio_data])
+        area_values = np.array([d['n_pixels'] for d in ratio_data])
+        
+        print(f"  Total cells with valid data: {len(ratio_data)}")
+        
+        # === 第1步：面积过滤（IQR方法）===
+        area_q1 = np.percentile(area_values, 25)
+        area_q3 = np.percentile(area_values, 75)
+        area_iqr = area_q3 - area_q1
+        area_lower = area_q1 - 1.5 * area_iqr
+        area_upper = area_q3 + 1.5 * area_iqr
+        area_valid = (area_values >= area_lower) & (area_values <= area_upper)
+        n_area_removed = np.sum(~area_valid)
+        print(f"  Area filter (IQR): removed {n_area_removed} cells (area < {area_lower:.0f} or > {area_upper:.0f} pixels)")
+        
+        # === 第2步：T50过滤（log10 + 2.5倍IQR）===
+        # 只对正值的T50取log
+        t50_positive_mask = t50_values > 0
+        t50_valid = np.zeros(len(t50_values), dtype=bool)
+        if np.sum(t50_positive_mask) > 0:
+            t50_log = np.log10(t50_values[t50_positive_mask])
+            t50_q1 = np.percentile(t50_log, 25)
+            t50_q3 = np.percentile(t50_log, 75)
+            t50_iqr = t50_q3 - t50_q1
+            t50_lower_log = t50_q1 - 2.5 * t50_iqr
+            t50_upper_log = t50_q3 + 2.5 * t50_iqr
+            # 还原为线性值用于显示
+            t50_lower_linear = 10 ** t50_lower_log
+            t50_upper_linear = 10 ** t50_upper_log
+            # 在原始数组上标记有效点
+            t50_valid[t50_positive_mask] = (t50_log >= t50_lower_log) & (t50_log <= t50_upper_log)
+            n_t50_removed = np.sum(t50_positive_mask) - np.sum(t50_valid)
+            print(f"  T50 filter (log10 + 2.5*IQR): removed {n_t50_removed} cells (T50 < {t50_lower_linear:.2f} or > {t50_upper_linear:.2f})")
+        else:
+            print("  T50 filter: no positive T50 values found")
             
-        # 剔除极端比值（使用 IQR 方法）
+        # === 第3步：Ratio过滤（IQR方法）===
         q1 = np.percentile(ratio_values, 25)
         q3 = np.percentile(ratio_values, 75)
         iqr = q3 - q1
         lower_bound = q1 - 1.5 * iqr
         upper_bound = q3 + 1.5 * iqr
+        ratio_valid = (ratio_values >= lower_bound) & (ratio_values <= upper_bound)
+        n_ratio_removed = np.sum(~ratio_valid)
+        print(f"  Ratio filter (IQR): removed {n_ratio_removed} cells (ratio < {lower_bound:.3f} or > {upper_bound:.3f})")
             
-        valid_mask = (ratio_values >= lower_bound) & (ratio_values <= upper_bound)
-        n_removed = np.sum(~valid_mask)
-            
-        print(f"  Total cells with valid data: {len(ratio_data)}")
-        print(f"  Removed outliers: {n_removed} (ratio < {lower_bound:.3f} or > {upper_bound:.3f})")
-        print(f"  Valid cells for analysis: {np.sum(valid_mask)}")
+        # === 组合所有过滤条件 ===
+        valid_mask = area_valid & t50_valid & ratio_valid
+        print(f"  Valid cells after all filters: {np.sum(valid_mask)}")
             
         # 过滤后的数据
         red_filtered = red_values[valid_mask]
@@ -611,8 +703,10 @@ class Visualizer:
             raise ValueError(f"Cell {cell_id} not found")
         time_points = []
         intensities = []
-        for cell_data in analysis.cells[cell_id]:
-            if cell_data.time_point >= analysis.skip_initial_frames:  # 跳过初始帧
+        # 按时间排序后跳过前N帧（而不是按时间值过滤）
+        sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
+        for idx, cell_data in enumerate(sorted_cells):
+            if idx >= analysis.skip_initial_frames:  # 跳过前N帧
                 time_points.append(cell_data.time_point)
                 if channel == 'channel1':
                     intensities.append(np.mean(cell_data.intensity1))
@@ -621,3 +715,29 @@ class Visualizer:
                 else:
                     raise ValueError(f"Unknown channel: {channel}")
         return np.array(time_points), np.array(intensities)
+
+    def _get_all_intensity_over_time(self, analysis: FileData, cell_id: int, channel: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """获取所有时间点的强度数据（包括跳过的），并返回跳过标记
+        
+        Returns:
+        - time_points: 所有时间点
+        - intensities: 所有强度值
+        - is_skipped: 布尔数组，True表示该点被跳过
+        """
+        if cell_id not in analysis.cells:
+            raise ValueError(f"Cell {cell_id} not found")
+        time_points = []
+        intensities = []
+        is_skipped = []
+        
+        sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
+        for idx, cell_data in enumerate(sorted_cells):
+            time_points.append(cell_data.time_point)
+            is_skipped.append(idx < analysis.skip_initial_frames)
+            if channel == 'channel1':
+                intensities.append(np.mean(cell_data.intensity1))
+            elif channel == 'channel2':
+                intensities.append(np.mean(cell_data.intensity2))
+            else:
+                raise ValueError(f"Unknown channel: {channel}")
+        return np.array(time_points), np.array(intensities), np.array(is_skipped)

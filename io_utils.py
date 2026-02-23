@@ -239,14 +239,23 @@ def auto_map_channels_from_metadata(channel_infos: List[Dict]) -> Optional[Tuple
     return indices[0], indices[1]
 
 
-def resolve_analysis_channel_indices(image_file: str, analysis_wavelengths: Optional[Tuple[float, float]], channels_count: int) -> Tuple[int, int]:
-    """决定用于分析的两个通道索引（channel1/channel2）。"""
+def resolve_analysis_channel_indices(image_file: str, analysis_wavelengths: Optional[Tuple[float, float]], channels_count: int, original_nd2_path: Optional[str] = None) -> Tuple[int, int]:
+    """决定用于分析的两个通道索引（channel1/channel2）。
+    
+    Parameters:
+    - image_file: 当前图像文件路径（可能是TIF或ND2）
+    - analysis_wavelengths: 分析用波长配置 (w1, w2)
+    - channels_count: 图像通道数
+    - original_nd2_path: 原始ND2文件路径（用于从拆分的TIF文件读取通道元数据）
+    """
     # 默认使用前两个通道
     ch1_idx, ch2_idx = 0, 1 if channels_count > 1 else 0
 
-    file_ext = Path(image_file).suffix.lower()
+    # 优先从原始ND2文件读取通道元数据
     channel_infos: List[Dict] = []
-    if file_ext == ".nd2":
+    if original_nd2_path and Path(original_nd2_path).suffix.lower() == ".nd2":
+        channel_infos = get_nd2_channel_info(original_nd2_path)
+    elif Path(image_file).suffix.lower() == ".nd2":
         channel_infos = get_nd2_channel_info(image_file)
 
     # 显式指定波长：--channels 561,488
@@ -366,8 +375,8 @@ def process_single_file_io(args):
     if (height, width) != mask.shape:
         raise ValueError(f"Image shape {(height, width)} doesn't match mask shape {mask.shape}")
 
-    # 决定用于分析的两个通道索引
-    ch1_idx, ch2_idx = resolve_analysis_channel_indices(image_file, analysis_channels, channels)
+    # 决定用于分析的两个通道索引（优先从原始ND2读取元数据）
+    ch1_idx, ch2_idx = resolve_analysis_channel_indices(image_file, analysis_channels, channels, original_nd2_path)
 
     # 创建分析对象
     analysis = FileData(
@@ -377,6 +386,10 @@ def process_single_file_io(args):
         original_nd2_path=original_nd2_path,
         position_index=position_idx
     )
+    
+    # 调试：输出跳过帧数设置
+    if skip_initial_frames > 0:
+        print(f"  Skip initial frames: {skip_initial_frames} (will exclude first {skip_initial_frames} time points from fitting)")
 
     # 获取细胞ID - 确保是整数类型
     unique_cells = np.unique(mask)
