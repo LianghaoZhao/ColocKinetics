@@ -126,20 +126,24 @@ class MaskFileMatcher:
         if mask_pattern:
             # 如果提供了特定的mask_pattern，只使用该模式匹配的蒙版
             all_mask_files = list(glob.glob(mask_pattern))
+            # 只保留真正的 mask 文件（_seg.npy 或 _masks.npy 或 _cp_masks.npy）
+            all_mask_files = [f for f in all_mask_files 
+                            if f.endswith('_seg.npy') or '_masks' in f or '_cp_masks' in f]
         else:
             # 否则收集所有可能的蒙版文件
             parent_dir = Path(image_files[0]).parent if image_files else Path('.')
-            mask_extensions = ['.npy', '.tif', '.tiff', '.png', '.jpg', '.jpeg']
             all_mask_files = []
-            for ext in mask_extensions:
-                all_mask_files.extend(glob.glob(str(parent_dir / f"*{ext}")))
+            # 只匹配 Cellpose 生成的 mask 文件格式
+            mask_patterns = ['*_seg.npy', '*_masks.npy', '*_cp_masks.npy', '*_masks.tif', '*_cp_masks.tif']
+            for pattern in mask_patterns:
+                all_mask_files.extend(glob.glob(str(parent_dir / pattern)))
 
         # 为每个图像文件找到最佳匹配的蒙版
         for image_file in image_files:
             image_path = Path(image_file)
             image_stem = image_path.stem
             best_match = None
-            best_score = -1
+            best_score = 0.3  # 设置最低相似度阈值，低于此值认为没有匹配
 
             for mask_file in all_mask_files:
                 mask_path = Path(mask_file)
@@ -149,7 +153,6 @@ class MaskFileMatcher:
                     best_score = score
                     best_match = mask_file
 
-            # 简化：直接返回最高分匹配，不再设置阈值
             matches[image_file] = best_match
 
         return matches

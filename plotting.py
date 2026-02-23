@@ -58,7 +58,8 @@ class Visualizer:
         # 计算子图布局 (5列)
         n_cols = 5
         n_rows = (n_cells + n_cols - 1) // n_cols
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(20, 4*n_rows))
+        # 增加每行高度以容纳下方的信息
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(20, 4.5*n_rows))
         if n_rows == 1 and n_cols == 1:
             axes = [axes]
         elif n_rows == 1:
@@ -215,13 +216,12 @@ class Visualizer:
         for idx in range(len(all_cell_ids), len(axes)):
             axes[idx].set_visible(False)
 
-        plt.tight_layout()
-        # 调整子图间距，为下方信息留出空间
-        plt.subplots_adjust(hspace=0.45)
+        # 先调整子图间距，为下方信息留出空间，再保存
+        plt.subplots_adjust(hspace=0.5, bottom=0.08)
         # 保存图片，使用原始文件名作为前缀
         fig_filename = f"{original_filename}_all_cells_analysis.png"
         fig_path = Path(self.output_dir) / fig_filename
-        fig.savefig(fig_path, dpi=300, bbox_inches='tight')
+        fig.savefig(fig_path, dpi=300)
         plt.close(fig)  # 关闭图形以释放内存
 
     def _plot_single_cell_detailed(self, analysis: FileData, cell_id: int, fit_model: str, include_scatter: bool):
@@ -494,6 +494,17 @@ class Visualizer:
                 if np.isnan(t50):
                     continue
                     
+                # 获取第一个和最后一个有效时间点的pearson相关系数
+                time_points_arr, correlations_arr, _ = CoLocalizationMetrics.get_correlation_over_time_of_a_cell(analysis, cell_id)
+                if len(correlations_arr) < 2:
+                    continue
+                first_pearson = correlations_arr[0]
+                last_pearson = correlations_arr[-1]
+                pearson_change = last_pearson - first_pearson  # 变化量（通常为负，因为相关系数下降）
+                
+                if np.isnan(first_pearson) or np.isnan(last_pearson):
+                    continue
+                
                 ratio_data.append({
                     'file_path': file_path,
                     'file_stem': file_stem,
@@ -502,7 +513,8 @@ class Visualizer:
                     'green': green_value,
                     'ratio': ratio,
                     'n_pixels': first_cell_data.n_pixels,  # 细胞面积（像素数）
-                    't50': t50
+                    't50': t50,
+                    'pearson_change': pearson_change  # 第一个点到最后一个点的pearson变化
                 })
             
         if len(ratio_data) == 0:
@@ -515,6 +527,7 @@ class Visualizer:
         ratio_values = np.array([d['ratio'] for d in ratio_data])
         t50_values = np.array([d['t50'] for d in ratio_data])
         area_values = np.array([d['n_pixels'] for d in ratio_data])
+        pearson_change_values = np.array([d['pearson_change'] for d in ratio_data])
         
         print(f"  Total cells with valid data: {len(ratio_data)}")
         
@@ -549,18 +562,18 @@ class Visualizer:
         else:
             print("  T50 filter: no positive T50 values found")
             
-        # === 第3步：Ratio过滤（IQR方法）===
-        q1 = np.percentile(ratio_values, 25)
-        q3 = np.percentile(ratio_values, 75)
-        iqr = q3 - q1
-        lower_bound = q1 - 1.5 * iqr
-        upper_bound = q3 + 1.5 * iqr
-        ratio_valid = (ratio_values >= lower_bound) & (ratio_values <= upper_bound)
-        n_ratio_removed = np.sum(~ratio_valid)
-        print(f"  Ratio filter (IQR): removed {n_ratio_removed} cells (ratio < {lower_bound:.3f} or > {upper_bound:.3f})")
+        # === 第3步：Pearson变化过滤（IQR方法）===
+        pc_q1 = np.percentile(pearson_change_values, 25)
+        pc_q3 = np.percentile(pearson_change_values, 75)
+        pc_iqr = pc_q3 - pc_q1
+        pc_lower = pc_q1 - 1.5 * pc_iqr
+        pc_upper = pc_q3 + 1.5 * pc_iqr
+        pearson_valid = (pearson_change_values >= pc_lower) & (pearson_change_values <= pc_upper)
+        n_pearson_removed = np.sum(~pearson_valid)
+        print(f"  Pearson change filter (IQR): removed {n_pearson_removed} cells (delta < {pc_lower:.3f} or > {pc_upper:.3f})")
             
         # === 组合所有过滤条件 ===
-        valid_mask = area_valid & t50_valid & ratio_valid
+        valid_mask = area_valid & t50_valid & pearson_valid
         print(f"  Valid cells after all filters: {np.sum(valid_mask)}")
             
         # 过滤后的数据
@@ -568,6 +581,10 @@ class Visualizer:
         green_filtered = green_values[valid_mask]
         ratio_filtered = ratio_values[valid_mask]
         t50_filtered = t50_values[valid_mask]
+        
+        # 对红绿强度取倒数用于拟合分析
+        red_inv_filtered = 1.0 / red_filtered
+        green_inv_filtered = 1.0 / green_filtered
             
         if len(t50_filtered) < 3:
             print("Not enough valid data points for analysis.")
@@ -576,29 +593,29 @@ class Visualizer:
         # 创建图表: 2x2 布局
         fig, axes = plt.subplots(2, 2, figsize=(14, 12))
             
-        # 1. 红色值 vs T50
+        # 1. 1/红色值 vs T50
         ax1 = axes[0, 0]
-        ax1.scatter(red_filtered, t50_filtered, alpha=0.6, s=40, c='red', edgecolors='darkred')
-        slope1, intercept1, r1, p1, se1 = stats.linregress(red_filtered, t50_filtered)
-        x_line = np.linspace(red_filtered.min(), red_filtered.max(), 100)
+        ax1.scatter(red_inv_filtered, t50_filtered, alpha=0.6, s=40, c='red', edgecolors='darkred')
+        slope1, intercept1, r1, p1, se1 = stats.linregress(red_inv_filtered, t50_filtered)
+        x_line = np.linspace(red_inv_filtered.min(), red_inv_filtered.max(), 100)
         ax1.plot(x_line, slope1 * x_line + intercept1, 'k--', linewidth=2, 
                 label=f'R={r1:.3f}, p={p1:.2e}')
-        ax1.set_xlabel('Red Intensity (Mean)', fontsize=11)
+        ax1.set_xlabel('1/Red Intensity', fontsize=11)
         ax1.set_ylabel('T50 (Correlation)', fontsize=11)
-        ax1.set_title('Red Intensity vs T50', fontsize=12)
+        ax1.set_title('1/Red Intensity vs T50', fontsize=12)
         ax1.legend(loc='best')
         ax1.grid(True, alpha=0.3)
             
-        # 2. 绿色值 vs T50
+        # 2. 1/绿色值 vs T50
         ax2 = axes[0, 1]
-        ax2.scatter(green_filtered, t50_filtered, alpha=0.6, s=40, c='green', edgecolors='darkgreen')
-        slope2, intercept2, r2, p2, se2 = stats.linregress(green_filtered, t50_filtered)
-        x_line = np.linspace(green_filtered.min(), green_filtered.max(), 100)
+        ax2.scatter(green_inv_filtered, t50_filtered, alpha=0.6, s=40, c='green', edgecolors='darkgreen')
+        slope2, intercept2, r2, p2, se2 = stats.linregress(green_inv_filtered, t50_filtered)
+        x_line = np.linspace(green_inv_filtered.min(), green_inv_filtered.max(), 100)
         ax2.plot(x_line, slope2 * x_line + intercept2, 'k--', linewidth=2,
                 label=f'R={r2:.3f}, p={p2:.2e}')
-        ax2.set_xlabel('Green Intensity (Mean)', fontsize=11)
+        ax2.set_xlabel('1/Green Intensity', fontsize=11)
         ax2.set_ylabel('T50 (Correlation)', fontsize=11)
-        ax2.set_title('Green Intensity vs T50', fontsize=12)
+        ax2.set_title('1/Green Intensity vs T50', fontsize=12)
         ax2.legend(loc='best')
         ax2.grid(True, alpha=0.3)
             
@@ -637,10 +654,10 @@ class Visualizer:
         print(f"  Saved: {fig_path}")
             
         # 输出统计结果
-        print(f"\n  Analysis Results (Mean-based):")
-        print(f"    Red vs T50:   R={r1:.3f}, p={p1:.2e}")
-        print(f"    Green vs T50: R={r2:.3f}, p={p2:.2e}")
-        print(f"    Ratio vs T50: R={r3:.3f}, p={p3:.2e}")
+        print(f"\n  Analysis Results (Inverse Intensity):")
+        print(f"    1/Red vs T50:   R={r1:.3f}, p={p1:.2e}")
+        print(f"    1/Green vs T50: R={r2:.3f}, p={p2:.2e}")
+        print(f"    Ratio vs T50:   R={r3:.3f}, p={p3:.2e}")
         
     def _fit_gmm_2components(self, pixels: np.ndarray) -> Dict:
         """
