@@ -188,7 +188,7 @@ def split_nd2_by_position(image_file, output_dir):
 def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=0.5, 
                           batch_size=100, use_gpu=True, gpu_device=0,
                           focus_loss_threshold=0.7, skip_focus_loss=True,
-                          focus_loss_background=100.0):
+                          focus_loss_background=100.0, min_valid_ratio=0.8):
     """
     运行漂移校正（支持增量处理，自动检测已有的校正结果）
     
@@ -245,7 +245,8 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
                     gpu_device=gpu_device,
                     focus_loss_threshold=focus_loss_threshold,
                     skip_focus_loss=skip_focus_loss,
-                    focus_loss_background=focus_loss_background
+                    focus_loss_background=focus_loss_background,
+                    min_valid_ratio=min_valid_ratio
                 )
                 
                 # 记录丢焦信息
@@ -254,8 +255,16 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
                 
                 if corrected_path:
                     corrected_files.append(corrected_path)
-                    print(f"     -> Corrected: {Path(corrected_path).name}")
+                    # 显示截断信息
+                    if focus_loss_info and focus_loss_info.get('truncated', False):
+                        print(f"     -> Corrected (truncated to {focus_loss_info['truncated_frames']} frames): {Path(corrected_path).name}")
+                    else:
+                        print(f"     -> Corrected: {Path(corrected_path).name}")
+                elif focus_loss_info and focus_loss_info.get('skipped', False):
+                    # 丢焦且有效帧不足，完全排除，不加入后续分析
+                    print(f"     -> EXCLUDED (focus loss with insufficient valid frames): {Path(split_file).name}")
                 else:
+                    # 其他失败情况（非丢焦原因），使用原始文件
                     print(f"     -> Motion correction failed, using original {Path(split_file).name}")
                     corrected_files.append(split_file)
         except Exception as e:
@@ -358,6 +367,8 @@ def main():
                        help='Motion correction: do not skip sequences with focus loss')
     parser.add_argument('--mc-focus-loss-background', type=float, default=100.0,
                        help='Motion correction: background value to subtract for focus loss detection (default: 100)')
+    parser.add_argument('--mc-min-valid-ratio', type=float, default=0.8,
+                       help='Motion correction: minimum valid frames ratio to keep truncated sequences (default: 0.8, i.e. 80%%)')
     
     # Cellpose 参数
     parser.add_argument('--cp-diameter', type=int, default=380,
@@ -464,20 +475,33 @@ def main():
             gpu_device=args.gpu,
             focus_loss_threshold=args.mc_focus_loss_threshold,
             skip_focus_loss=not args.mc_no_skip_focus_loss,
-            focus_loss_background=args.mc_focus_loss_background
+            focus_loss_background=args.mc_focus_loss_background,
+            min_valid_ratio=args.mc_min_valid_ratio
         )
         
         # 打印丢焦汇总
         if focus_loss_records:
+            # 区分截断和完全跳过的情况
+            truncated_records = [r for r in focus_loss_records if r.get('truncated', False)]
+            skipped_records = [r for r in focus_loss_records if r.get('skipped', False)]
+            
             print("\n" + "-" * 40)
-            print(f"FOCUS LOSS SUMMARY: {len(focus_loss_records)} sequences skipped")
+            print(f"FOCUS LOSS SUMMARY: {len(focus_loss_records)} sequences affected")
+            if truncated_records:
+                print(f"  - {len(truncated_records)} truncated (kept for analysis)")
+            if skipped_records:
+                print(f"  - {len(skipped_records)} excluded (insufficient valid frames)")
             print("-" * 40)
+            
             for info in focus_loss_records:
                 frame = info['focus_loss_frame']
                 total = info['total_frames']
                 ratio = info['intensity_ratios'][frame] if frame else 0
-                print(f"  - {Path(info['file']).name}")
+                status = "TRUNCATED" if info.get('truncated', False) else "EXCLUDED"
+                print(f"  - {Path(info['file']).name} [{status}]")
                 print(f"    Frame {frame}/{total}, intensity ratio: {ratio:.3f}")
+                if info.get('truncated', False):
+                    print(f"    Kept {info['truncated_frames']} frames ({info['truncated_frames']/total:.0%})")
             print("-" * 40)
         
         # 使用校正后的文件进行后续分析

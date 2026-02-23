@@ -654,7 +654,8 @@ class Visualizer:
         red_inv_clean, t50_red_clean, _, _ = filter_by_cooks_distance(
             red_inv_filtered, t50_filtered, '1/Red vs T50', file_stems_filtered, cell_ids_filtered)
         ax1 = axes[0, 0]
-        ax1.scatter(red_inv_clean, t50_red_clean, alpha=0.6, s=40, c='red', edgecolors='darkred')
+        ax1.scatter(red_inv_clean, t50_red_clean, alpha=0.6, s=40, c='#D96459', edgecolors='#B84A40')
+        ax1.tick_params(axis='both', labelsize=20)
         slope1, intercept1, r1, p1, se1 = stats.linregress(red_inv_clean, t50_red_clean)
         x_line = np.linspace(red_inv_clean.min(), red_inv_clean.max(), 100)
         ax1.plot(x_line, slope1 * x_line + intercept1, 'k--', linewidth=2, 
@@ -669,7 +670,8 @@ class Visualizer:
         green_inv_clean, t50_green_clean, _, _ = filter_by_cooks_distance(
             green_inv_filtered, t50_filtered, '1/Green vs T50', file_stems_filtered, cell_ids_filtered)
         ax2 = axes[0, 1]
-        ax2.scatter(green_inv_clean, t50_green_clean, alpha=0.6, s=40, c='green', edgecolors='darkgreen')
+        ax2.scatter(green_inv_clean, t50_green_clean, alpha=0.6, s=40, c='#45ADA8', edgecolors='#358985')
+        ax2.tick_params(axis='both', labelsize=20)
         slope2, intercept2, r2, p2, se2 = stats.linregress(green_inv_clean, t50_green_clean)
         x_line = np.linspace(green_inv_clean.min(), green_inv_clean.max(), 100)
         ax2.plot(x_line, slope2 * x_line + intercept2, 'k--', linewidth=2,
@@ -685,6 +687,7 @@ class Visualizer:
             ratio_filtered, t50_filtered, 'Ratio vs T50', file_stems_filtered, cell_ids_filtered)
         ax3 = axes[1, 0]
         ax3.scatter(ratio_clean, t50_ratio_clean, alpha=0.6, s=40, c='purple', edgecolors='darkviolet')
+        ax3.tick_params(axis='both', labelsize=20)
         slope3, intercept3, r3, p3, se3 = stats.linregress(ratio_clean, t50_ratio_clean)
         x_line = np.linspace(ratio_clean.min(), ratio_clean.max(), 100)
         ax3.plot(x_line, slope3 * x_line + intercept3, 'k--', linewidth=2,
@@ -698,6 +701,7 @@ class Visualizer:
         # 4. 比值分布直方图 (使用过滤后的数据)
         ax4 = axes[1, 1]
         ax4.hist(ratio_clean, bins=30, color='purple', alpha=0.7, edgecolor='black')
+        ax4.tick_params(axis='both', labelsize=20)
         ax4.axvline(x=np.median(ratio_clean), color='red', linestyle='--', 
                    linewidth=2, label=f'Median: {np.median(ratio_clean):.3f}')
         ax4.axvline(x=np.mean(ratio_clean), color='blue', linestyle='--',
@@ -813,7 +817,8 @@ class Visualizer:
         model_red_green = sm.OLS(red_inv_clean, sm.add_constant(green_inv_clean)).fit()
         resid_y = model_y_green.resid
         resid_red = model_red_green.resid
-        ax1.scatter(resid_red, resid_y, alpha=0.6, s=40, c='red', edgecolors='darkred')
+        ax1.scatter(resid_red, resid_y, alpha=0.6, s=40, c='#D96459', edgecolors='#B84A40')
+        ax1.tick_params(axis='both', labelsize=20)
         # 拟合偏回归线
         slope_partial, intercept_partial, r_partial, p_partial, _ = stats.linregress(resid_red, resid_y)
         x_line = np.linspace(resid_red.min(), resid_red.max(), 100)
@@ -834,7 +839,8 @@ class Visualizer:
         model_green_red = sm.OLS(green_inv_clean, sm.add_constant(red_inv_clean)).fit()
         resid_y2 = model_y_red.resid
         resid_green = model_green_red.resid
-        ax2.scatter(resid_green, resid_y2, alpha=0.6, s=40, c='green', edgecolors='darkgreen')
+        ax2.scatter(resid_green, resid_y2, alpha=0.6, s=40, c='#45ADA8', edgecolors='#358985')
+        ax2.tick_params(axis='both', labelsize=20)
         slope_partial2, intercept_partial2, r_partial2, p_partial2, _ = stats.linregress(resid_green, resid_y2)
         x_line = np.linspace(resid_green.min(), resid_green.max(), 100)
         ax2.plot(x_line, slope_partial2 * x_line + intercept_partial2, 'k--', linewidth=2,
@@ -850,6 +856,7 @@ class Visualizer:
         # 3. 残差 vs 拟合值图
         ax3 = axes[1, 0]
         ax3.scatter(fitted_values, residuals, alpha=0.6, s=40, c='blue', edgecolors='darkblue')
+        ax3.tick_params(axis='both', labelsize=20)
         ax3.axhline(y=0, color='red', linestyle='--', linewidth=2)
         # 添加LOWESS平滑线
         try:
@@ -869,6 +876,7 @@ class Visualizer:
         from scipy import stats as scipy_stats
         scipy_stats.probplot(residuals, dist="norm", plot=ax4)
         ax4.set_title('Normal Q-Q Plot of Residuals', fontsize=12)
+        ax4.tick_params(axis='both', labelsize=20)
         ax4.grid(True, alpha=0.3)
         
         plt.tight_layout()

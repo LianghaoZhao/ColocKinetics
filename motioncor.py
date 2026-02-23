@@ -348,7 +348,7 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
                           border=0, max_iterations=10, threshold=0.5, 
                           batch_size=100, use_gpu=True, gpu_device=0,
                           focus_loss_threshold=0.7, skip_focus_loss=True,
-                          focus_loss_background=100.0):
+                          focus_loss_background=100.0, min_valid_ratio=0.8):
     """
     处理图像序列并进行漂移校正
 
@@ -368,6 +368,7 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
     - focus_loss_threshold: 丢焦检测阈值（帧间强度比值，默认0.7）
     - skip_focus_loss: 是否跳过丢焦序列（默认True）
     - focus_loss_background: 丢焦检测时扣除的背景值（默认100.0）
+    - min_valid_ratio: 最小有效帧比例（默认0.8），丢焦时若有效帧>=此比例则截断继续处理
     
     Returns:
     - cumulative_shifts: 累积漂移数组，如果跳过则为 None
@@ -547,7 +548,10 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
         'total_frames': len(drift_frames),
         'intensity_ratios': intensity_ratios,
         'frame_intensities': frame_intensities,
-        'threshold': focus_loss_threshold
+        'threshold': focus_loss_threshold,
+        'truncated': False,  # 是否被截断
+        'truncated_frames': None,  # 截断后的帧数
+        'skipped': False  # 是否被完全跳过
     }
     
     if focus_lost:
@@ -557,8 +561,27 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
                   f"(intensity ratio: {ratio_at_loss:.3f} < {focus_loss_threshold})")
         
         if skip_focus_loss:
-            print(f"Skipping sequence due to focus loss: {input_path}")
-            return None, None, focus_loss_info
+            # 计算有效帧比例（丢焦帧之前的都是有效的）
+            total_frames = len(drift_frames)
+            valid_frames = focus_loss_frame if focus_loss_frame is not None else 0
+            valid_ratio = valid_frames / total_frames if total_frames > 0 else 0
+            
+            if valid_ratio >= min_valid_ratio:
+                # 有效帧比例足够，截断数据继续处理
+                print(f"Valid frames ratio: {valid_ratio:.1%} >= {min_valid_ratio:.0%}, "
+                      f"truncating to first {valid_frames} frames and continuing...")
+                # 截断数据
+                drift_frames = drift_frames[:valid_frames]
+                original_frames = original_frames[:valid_frames]
+                # 更新 focus_loss_info
+                focus_loss_info['truncated'] = True
+                focus_loss_info['truncated_frames'] = valid_frames
+            else:
+                # 有效帧比例不足，跳过整个序列
+                print(f"Valid frames ratio: {valid_ratio:.1%} < {min_valid_ratio:.0%}, "
+                      f"skipping entire sequence: {input_path}")
+                focus_loss_info['skipped'] = True
+                return None, None, focus_loss_info
 
     # 执行迭代漂移校正 - 只计算漂移，不应用
     try:
