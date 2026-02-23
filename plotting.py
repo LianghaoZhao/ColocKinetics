@@ -179,15 +179,8 @@ class Visualizer:
             ax.legend(fontsize=7, loc='upper right')
             ax.axhline(y=0, color='r', linestyle='--', alpha=0.5)
             
-            # 在小图右下角添加信号强度、细胞大小和颜色条
+            # 在小图下方添加信号强度、细胞大小和颜色条（避免遮挡曲线）
             if not np.isnan(red_intensity) and not np.isnan(green_intensity):
-                # 添加文本信息
-                info_text = f'R:{red_intensity:.0f} G:{green_intensity:.0f}\nArea:{cell_size}px'
-                ax.text(0.02, 0.02, info_text, transform=ax.transAxes, fontsize=7,
-                       verticalalignment='bottom', horizontalalignment='left',
-                       bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
-                
-                # 绘制颜色条矩形（右下角）
                 # 计算归一化的颜色深浅 (0-1)
                 if red_max > red_min:
                     red_norm = (red_intensity - red_min) / (red_max - red_min)
@@ -198,16 +191,24 @@ class Visualizer:
                 else:
                     green_norm = 0.5
                 
-                # 红色方框 - 颜色深浅表示强度
+                # 构建下方标签文本：红绿信号强度 + 面积 + 颜色方块
+                # 使用 xlabel 下方的空间
+                info_text = f'R:{red_intensity:.0f}  G:{green_intensity:.0f}  Area:{cell_size}px'
+                ax.text(0.5, -0.22, info_text, transform=ax.transAxes, fontsize=8,
+                       ha='center', va='top')
+                
+                # 红色方框 - 颜色深浅表示强度（放在文字下方）
                 red_color = (1.0, 1.0 - red_norm * 0.8, 1.0 - red_norm * 0.8)  # 从浅粉到深红
-                rect_red = plt.Rectangle((0.75, 0.02), 0.10, 0.08, transform=ax.transAxes,
-                                         facecolor=red_color, edgecolor='darkred', linewidth=1.5)
+                rect_red = plt.Rectangle((0.35, -0.32), 0.12, 0.06, transform=ax.transAxes,
+                                         facecolor=red_color, edgecolor='darkred', linewidth=1.5,
+                                         clip_on=False)
                 ax.add_patch(rect_red)
                 
                 # 绿色方框 - 颜色深浅表示强度
                 green_color = (1.0 - green_norm * 0.8, 1.0, 1.0 - green_norm * 0.8)  # 从浅绿到深绿
-                rect_green = plt.Rectangle((0.87, 0.02), 0.10, 0.08, transform=ax.transAxes,
-                                           facecolor=green_color, edgecolor='darkgreen', linewidth=1.5)
+                rect_green = plt.Rectangle((0.53, -0.32), 0.12, 0.06, transform=ax.transAxes,
+                                           facecolor=green_color, edgecolor='darkgreen', linewidth=1.5,
+                                           clip_on=False)
                 ax.add_patch(rect_green)
 
         # 隐藏多余的子图
@@ -215,6 +216,8 @@ class Visualizer:
             axes[idx].set_visible(False)
 
         plt.tight_layout()
+        # 调整子图间距，为下方信息留出空间
+        plt.subplots_adjust(hspace=0.45)
         # 保存图片，使用原始文件名作为前缀
         fig_filename = f"{original_filename}_all_cells_analysis.png"
         fig_path = Path(self.output_dir) / fig_filename

@@ -487,8 +487,25 @@ def main():
             print(f"\nUsing existing masks: {args.mask_pattern}")
             mask_pattern = args.mask_pattern
         else:
+            # --skip-cellpose 但没有指定 --mask-pattern，查找已有的 mask 文件
             print("\nSkipping Cellpose (--skip-cellpose)")
-            mask_pattern = None
+            mask_dir = Path(output_dir) / 'mask'
+            if mask_dir.exists():
+                existing_masks = find_existing_masks(analysis_files, str(mask_dir))
+                found_masks = {k: v for k, v in existing_masks.items() if v is not None}
+                if found_masks:
+                    print(f"  Found {len(found_masks)} existing mask files in {mask_dir}:")
+                    for img, mask in found_masks.items():
+                        print(f"    - {Path(mask).name}")
+                    mask_pattern = str(mask_dir / '*.npy')
+                else:
+                    print(f"  No mask files found in {mask_dir}")
+                    print("  Please specify --mask-pattern to provide existing mask files")
+                    mask_pattern = None
+            else:
+                print(f"  Mask directory not found: {mask_dir}")
+                print("  Please specify --mask-pattern to provide existing mask files")
+                mask_pattern = None
     
     # Step 3: Co-localization Analysis (共定位分析)
     print("\n" + "=" * 60)
