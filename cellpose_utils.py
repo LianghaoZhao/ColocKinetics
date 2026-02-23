@@ -92,9 +92,9 @@ def run_cellpose_on_files(
             continue
         
         # 2.2 构建 eval 参数字典
+        # Cellpose 4.0.1+ 已废弃 channels 参数，自动检测通道
         eval_kwargs = {
             'diameter': diameter,
-            'channels': [0, 0],  # 默认使用所有通道
         }
         
         # 添加 niter 参数（如果指定）
@@ -105,7 +105,8 @@ def run_cellpose_on_files(
         if verbose:
             print(f"  Running Cellpose evaluation on {len(imgs)} images...")
         
-        masks, flows, styles, diams = model.eval(imgs, **eval_kwargs)
+        # Cellpose 4.x 返回 3 个值：masks, flows, styles（不再返回 diams）
+        masks, flows, styles = model.eval(imgs, **eval_kwargs)
         
         # 2.4 批量保存结果
         if verbose:
@@ -144,7 +145,7 @@ def run_cellpose_on_files(
                         print(f"    Warning: Failed to save PNG visualization: {e}")
         
         # 2.5 显式释放当前批次数据（帮助垃圾回收）
-        del imgs, masks, flows, styles, diams
+        del imgs, masks, flows, styles
         if use_gpu:
             import torch
             if torch.cuda.is_available():
