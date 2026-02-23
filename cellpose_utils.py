@@ -95,7 +95,6 @@ def run_cellpose_on_files(
         eval_kwargs = {
             'diameter': diameter,
             'channels': [0, 0],  # 默认使用所有通道
-            'verbose': False,  # 批次内不显示详细输出
         }
         
         # 添加 niter 参数（如果指定）
