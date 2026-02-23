@@ -494,17 +494,6 @@ def main():
     print("\n" + "=" * 60)
     print("Step 3: Co-localization Analysis")
     print("=" * 60)
-    
-    # 显示分析参数
-    frame_range_info = []
-    if args.skip_initial_frames > 0:
-        frame_range_info.append(f"skip first {args.skip_initial_frames}")
-    if args.max_frames is not None:
-        frame_range_info.append(f"use only first {args.max_frames}")
-    if frame_range_info:
-        print(f"\nFrame range: {', '.join(frame_range_info)}")
-        print(f"  -> Fitting on frames {args.skip_initial_frames} to {args.max_frames - 1 if args.max_frames else 'end'}")
-        print(f"  -> Points outside this range will be shown in gray color")
 
     # 创建分析器
     analyzer = MainAnalyzer()

@@ -392,15 +392,6 @@ def process_single_file_io(args):
         original_nd2_path=original_nd2_path,
         position_index=position_idx
     )
-    
-    # 调试：输出帧范围设置
-    range_info = []
-    if skip_initial_frames > 0:
-        range_info.append(f"skip first {skip_initial_frames}")
-    if max_frames is not None:
-        range_info.append(f"use only first {max_frames}")
-    if range_info:
-        print(f"  Frame range: {', '.join(range_info)} (fitting on frames {skip_initial_frames} to {max_frames if max_frames else time_points - 1})")
 
     # 获取细胞ID - 确保是整数类型
     unique_cells = np.unique(mask)
