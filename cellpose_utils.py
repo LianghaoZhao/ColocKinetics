@@ -51,7 +51,13 @@ def run_cellpose_on_files(
     
     # 1. 仅在这里加载一次模型到 GPU/CPU
     # Cellpose 4.x 使用 CellposeModel，默认模型为 cpsam (Cellpose-SAM)
-    model = models.CellposeModel(gpu=use_gpu, device=gpu_device, pretrained_model='cpsam')
+    # device 参数需要 torch.device 对象，不能直接传整数
+    import torch
+    if use_gpu and torch.cuda.is_available():
+        device = torch.device(f'cuda:{gpu_device}')
+    else:
+        device = torch.device('cpu')
+    model = models.CellposeModel(gpu=use_gpu, device=device, pretrained_model='cpsam')
     
     total_files = len(image_files)
     all_mask_files = []
