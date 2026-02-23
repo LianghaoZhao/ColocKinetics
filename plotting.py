@@ -178,7 +178,7 @@ class Visualizer:
             else:
                 ax.set_title(f'Cell {cell_id}\nR²: {fit_results["r_squared"]:.3f}')
             ax.grid(True, alpha=0.3)
-            ax.legend(fontsize=7, loc='upper right')
+            ax.legend(fontsize=7, loc='lower right')
             ax.axhline(y=0, color='r', linestyle='--', alpha=0.5)
             
             # 给每个子图添加外框线，让细胞之间更清晰分隔
