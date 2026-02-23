@@ -185,7 +185,7 @@ def split_nd2_by_position(image_file, output_dir):
         return [image_file]
 
 
-def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=0.5, batch_size=100, use_gpu=True):
+def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=0.5, batch_size=100, use_gpu=True, gpu_device=0):
     """
     运行漂移校正（支持增量处理，自动检测已有的校正结果）
     
@@ -236,7 +236,8 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
                     max_iterations=max_iterations,
                     threshold=threshold,
                     batch_size=batch_size,
-                    use_gpu=use_gpu
+                    use_gpu=use_gpu,
+                    gpu_device=gpu_device
                 )
                 if corrected_path:
                     corrected_files.append(corrected_path)
@@ -342,8 +343,8 @@ def main():
     # Cellpose 参数
     parser.add_argument('--cp-diameter', type=int, default=380,
                        help='Cellpose: cell diameter in pixels (default: 380)')
-    parser.add_argument('--cp-gpu-device', type=int, default=0,
-                       help='Cellpose: GPU device ID (default: 0)')
+    parser.add_argument('--gpu', type=int, default=0,
+                       help='GPU device ID for both motioncor and Cellpose (default: 0)')
     parser.add_argument('--cp-no-gpu', action='store_true',
                        help='Cellpose: disable GPU')
     parser.add_argument('--cp-niter', type=int, default=None,
@@ -440,7 +441,8 @@ def main():
             max_iterations=args.mc_max_iterations,
             threshold=args.mc_threshold,
             batch_size=args.mc_batch_size,
-            use_gpu=not args.mc_no_gpu
+            use_gpu=not args.mc_no_gpu,
+            gpu_device=args.gpu
         )
         # 使用校正后的文件进行后续分析
         analysis_files = corrected_files
@@ -470,7 +472,7 @@ def main():
             analysis_files,
             output_dir,
             diameter=args.cp_diameter,
-            gpu_device=args.cp_gpu_device,
+            gpu_device=args.gpu,
             use_gpu=not args.cp_no_gpu,
             niter=args.cp_niter,
             cp_channel_wavelength=cp_channel_wavelength,

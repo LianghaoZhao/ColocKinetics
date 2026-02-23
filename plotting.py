@@ -181,6 +181,11 @@ class Visualizer:
             ax.legend(fontsize=7, loc='upper right')
             ax.axhline(y=0, color='r', linestyle='--', alpha=0.5)
             
+            # 给每个子图添加外框线，让细胞之间更清晰分隔
+            for spine in ax.spines.values():
+                spine.set_linewidth(1.5)
+                spine.set_color('black')
+            
             # 在小图下方添加信号强度、细胞大小和颜色条（避免遮挡曲线）
             if not np.isnan(red_intensity) and not np.isnan(green_intensity):
                 # 计算归一化的颜色深浅 (0-1)
@@ -194,21 +199,20 @@ class Visualizer:
                     green_norm = 0.5
                 
                 # 构建下方标签：R、G、Area文字 + 红绿正方形色块，都在一行横向排列
-                # 文字左对齐，矩形紧跟在文字后面
-                info_text = f'R:{red_intensity:.0f}  G:{green_intensity:.0f}  Area:{cell_size}  '
-                ax.text(0.05, -0.22, info_text, transform=ax.transAxes, fontsize=8,
-                       ha='left', va='top')
+                info_text = f'R:{red_intensity:.0f}  G:{green_intensity:.0f}  Area:{cell_size}'
+                ax.text(0.02, -0.24, info_text, transform=ax.transAxes, fontsize=8,
+                       ha='left', va='center')
                 
-                # 红色正方形 - 颜色深浅表示强度（紧跟在文字后面）
+                # 红色正方形 - 颜色深浅表示强度（与文字垂直居中对齐）
                 red_color = (1.0, 1.0 - red_norm * 0.8, 1.0 - red_norm * 0.8)  # 从浅粉到深红
-                rect_red = plt.Rectangle((0.57, -0.26), 0.06, 0.06, transform=ax.transAxes,
+                rect_red = plt.Rectangle((0.58, -0.27), 0.06, 0.06, transform=ax.transAxes,
                                          facecolor=red_color, edgecolor='darkred', linewidth=1.5,
                                          clip_on=False)
                 ax.add_patch(rect_red)
                 
                 # 绿色正方形 - 颜色深浅表示强度（紧跟在红色方框后面）
                 green_color = (1.0 - green_norm * 0.8, 1.0, 1.0 - green_norm * 0.8)  # 从浅绿到深绿
-                rect_green = plt.Rectangle((0.65, -0.26), 0.06, 0.06, transform=ax.transAxes,
+                rect_green = plt.Rectangle((0.66, -0.27), 0.06, 0.06, transform=ax.transAxes,
                                            facecolor=green_color, edgecolor='darkgreen', linewidth=1.5,
                                            clip_on=False)
                 ax.add_patch(rect_green)

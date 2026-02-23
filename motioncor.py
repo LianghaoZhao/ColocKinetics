@@ -23,6 +23,20 @@ except ImportError:
     CUCIM_AVAILABLE = False
     print("CuPy/cuCIM not available, using CPU only")
 
+# 当前使用的 GPU 设备 ID
+_current_gpu_device = 0
+
+def set_gpu_device(device_id: int):
+    """设置 CuPy 使用的 GPU 设备"""
+    global _current_gpu_device
+    if CUCIM_AVAILABLE and device_id >= 0:
+        try:
+            cp.cuda.Device(device_id).use()
+            _current_gpu_device = device_id
+            print(f"Motioncor: using GPU device {device_id}")
+        except Exception as e:
+            print(f"Warning: failed to set GPU device {device_id}: {e}")
+
 def calculate_drift_correlation_gpu(image1, image2, upsample_factor=10):
     """使用cuCIM在GPU上计算相位相关漂移"""
     if not CUCIM_AVAILABLE:
@@ -291,7 +305,7 @@ def iterative_drift_correction(frames, max_iterations=10, threshold=0.5,
 def process_image_sequence(input_path, output_dir, channel_selection='all',
                           sample_interval=1, save_visualization=True, auto_crop=True, 
                           border=0, max_iterations=10, threshold=0.5, 
-                          batch_size=100, use_gpu=True):
+                          batch_size=100, use_gpu=True, gpu_device=0):
     """
     处理图像序列并进行漂移校正
 
@@ -307,7 +321,12 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
     - threshold: 停止迭代的阈值（像素）
     - batch_size: 批处理大小
     - use_gpu: 是否使用GPU
+    - gpu_device: GPU 设备 ID（默认 0）
     """
+    
+    # 设置 GPU 设备
+    if use_gpu and CUCIM_AVAILABLE:
+        set_gpu_device(gpu_device)
 
     input_path = Path(input_path)
     print(f"Processing: {input_path}")
