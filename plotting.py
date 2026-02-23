@@ -10,6 +10,12 @@ from coloc_metrics import CoLocalizationMetrics
 from typing import Tuple, List, Dict
 from scipy import stats
 from sklearn.mixture import GaussianMixture
+import os
+
+# 限制sklearn/numpy的线程数，避免细粒度并行开销
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
 
 class Visualizer:
     """处理可视化结果的类"""
@@ -62,15 +68,15 @@ class Visualizer:
         else:
             axes = axes.flatten() if n_rows * n_cols > 1 else [axes]
 
+        # 预先计算所有细胞的指标（避免在循环中重复计算）
+        all_cell_metrics = CoLocalizationMetrics.calculate_metrics_for_file(analysis)
+        
         # 为每个细胞绘制相关系数随时间变化的图
         for idx, cell_id in enumerate(all_cell_ids):
-            time_points, correlations, p_values = CoLocalizationMetrics.get_correlation_over_time_of_a_cell(analysis, cell_id)
-            # Get fit results for this cell
-            # We need to calculate metrics and then fit for the specific cell to get results
-            # This requires calling the kinetics analyzer logic or having fit results available
-            # For simplicity in this module, let's assume we can call the analyzer's fit method on single data
-            # Or we re-implement the fitting call here based on the cell's data
-            cell_metrics = CoLocalizationMetrics.calculate_metrics_for_file(analysis)[cell_id]
+            cell_metrics = all_cell_metrics[cell_id]
+            time_points = cell_metrics['time_points']
+            correlations = cell_metrics['correlations']
+            p_values = cell_metrics['p_values']
             fit_results = ReactionFitter.fit_first_order_reaction if fit_model == 'first_order' else ReactionFitter.fit_delayed_first_order_reaction
             # This is complex, as fit_results is from the KineticsAnalyzer. We need to get it.
             # A better way is to pass fit results from the main process or re-calculate here.
@@ -295,7 +301,7 @@ class Visualizer:
                                        fit_model: str, background: float = 100.0):
         """
         生成红绿比值与T50关系的分析图
-        使用GMM拟合来提取红绿通道的代表性强度
+        使用平均强度来计算红绿通道的代表性强度
             
         Parameters:
         - analyses: FileData 列表
@@ -303,15 +309,10 @@ class Visualizer:
         - fit_model: 拟合模型
         - background: 本底信号（默认100）
         """
-        print("\nGenerating Red/Green ratio vs T50 analysis (GMM fitting)...")
-            
-        # 创建GMM拟合可视化输出目录
-        gmm_viz_dir = Path(self.output_dir) / 'gmm_fitting_viz'
-        gmm_viz_dir.mkdir(parents=True, exist_ok=True)
+        print("\nGenerating Red/Green ratio vs T50 analysis...")
             
         # 收集所有细胞的数据
         ratio_data = []
-        gmm_results = []  # 存储GMM拟合结果用于可视化
             
         for analysis in analyses:
             file_path = analysis.file_path
@@ -340,18 +341,9 @@ class Visualizer:
                 if len(red_pixels) < 50 or len(green_pixels) < 50:
                     continue
                     
-                # GMM拟合
-                try:
-                    red_result = self._fit_gmm_2components(red_pixels)
-                    green_result = self._fit_gmm_2components(green_pixels)
-                except Exception as e:
-                    print(f"  GMM fitting failed for {file_stem} cell {cell_id}: {e}")
-                    continue
-                    
-                # 红色：取权重小的峰（信号峰）
-                red_value = red_result['minor_peak_mean'] - background
-                # 绿色：取权重大的峰（主峰）
-                green_value = green_result['major_peak_mean'] - background
+                # 直接取平均值作为代表强度
+                red_value = np.mean(red_pixels) - background
+                green_value = np.mean(green_pixels) - background
                     
                 # 检查有效性
                 if red_value <= 0 or green_value <= 0:
@@ -377,27 +369,10 @@ class Visualizer:
                     'ratio': ratio,
                     't50': t50
                 })
-                    
-                # 存储GMM结果用于可视化
-                gmm_results.append({
-                    'file_stem': file_stem,
-                    'cell_id': cell_id,
-                    'red_pixels': red_pixels,
-                    'green_pixels': green_pixels,
-                    'red_gmm': red_result,
-                    'green_gmm': green_result,
-                    'red_selected': red_value + background,  # 选中的峰值（未扣除本底）
-                    'green_selected': green_value + background,
-                    'background': background
-                })
             
         if len(ratio_data) == 0:
             print("No valid data for ratio analysis.")
             return
-            
-        # 生成GMM拟合可视化图
-        print(f"  Generating GMM fitting visualizations for {len(gmm_results)} cells...")
-        self._generate_gmm_visualizations(gmm_results, gmm_viz_dir)
             
         # 转换为 numpy 数组
         red_values = np.array([d['red'] for d in ratio_data])
@@ -415,7 +390,7 @@ class Visualizer:
         valid_mask = (ratio_values >= lower_bound) & (ratio_values <= upper_bound)
         n_removed = np.sum(~valid_mask)
             
-        print(f"  Total cells with valid GMM fit: {len(ratio_data)}")
+        print(f"  Total cells with valid data: {len(ratio_data)}")
         print(f"  Removed outliers: {n_removed} (ratio < {lower_bound:.3f} or > {upper_bound:.3f})")
         print(f"  Valid cells for analysis: {np.sum(valid_mask)}")
             
@@ -439,7 +414,7 @@ class Visualizer:
         x_line = np.linspace(red_filtered.min(), red_filtered.max(), 100)
         ax1.plot(x_line, slope1 * x_line + intercept1, 'k--', linewidth=2, 
                 label=f'R={r1:.3f}, p={p1:.2e}')
-        ax1.set_xlabel('Red Intensity (GMM signal peak)', fontsize=11)
+        ax1.set_xlabel('Red Intensity (Mean)', fontsize=11)
         ax1.set_ylabel('T50 (Correlation)', fontsize=11)
         ax1.set_title('Red Intensity vs T50', fontsize=12)
         ax1.legend(loc='best')
@@ -452,7 +427,7 @@ class Visualizer:
         x_line = np.linspace(green_filtered.min(), green_filtered.max(), 100)
         ax2.plot(x_line, slope2 * x_line + intercept2, 'k--', linewidth=2,
                 label=f'R={r2:.3f}, p={p2:.2e}')
-        ax2.set_xlabel('Green Intensity (GMM main peak)', fontsize=11)
+        ax2.set_xlabel('Green Intensity (Mean)', fontsize=11)
         ax2.set_ylabel('T50 (Correlation)', fontsize=11)
         ax2.set_title('Green Intensity vs T50', fontsize=12)
         ax2.legend(loc='best')
@@ -465,7 +440,7 @@ class Visualizer:
         x_line = np.linspace(ratio_filtered.min(), ratio_filtered.max(), 100)
         ax3.plot(x_line, slope3 * x_line + intercept3, 'k--', linewidth=2,
                 label=f'R={r3:.3f}, p={p3:.2e}')
-        ax3.set_xlabel('Red/Green Ratio (GMM)', fontsize=11)
+        ax3.set_xlabel('Red/Green Ratio', fontsize=11)
         ax3.set_ylabel('T50 (Correlation)', fontsize=11)
         ax3.set_title('Red/Green Ratio vs T50', fontsize=12)
         ax3.legend(loc='best')
@@ -478,7 +453,7 @@ class Visualizer:
                    linewidth=2, label=f'Median: {np.median(ratio_filtered):.3f}')
         ax4.axvline(x=np.mean(ratio_filtered), color='blue', linestyle='--',
                    linewidth=2, label=f'Mean: {np.mean(ratio_filtered):.3f}')
-        ax4.set_xlabel('Red/Green Ratio (GMM)', fontsize=11)
+        ax4.set_xlabel('Red/Green Ratio', fontsize=11)
         ax4.set_ylabel('Count', fontsize=11)
         ax4.set_title(f'Red/Green Ratio Distribution (n={len(ratio_filtered)})', fontsize=12)
         ax4.legend(loc='best')
@@ -493,7 +468,7 @@ class Visualizer:
         print(f"  Saved: {fig_path}")
             
         # 输出统计结果
-        print(f"\n  Analysis Results (GMM-based):")
+        print(f"\n  Analysis Results (Mean-based):")
         print(f"    Red vs T50:   R={r1:.3f}, p={p1:.2e}")
         print(f"    Green vs T50: R={r2:.3f}, p={p2:.2e}")
         print(f"    Ratio vs T50: R={r3:.3f}, p={p3:.2e}")
@@ -515,8 +490,8 @@ class Visualizer:
         # 重塑为2D数组
         X = pixels.reshape(-1, 1)
             
-        # 拟合GMM
-        gmm = GaussianMixture(n_components=2, random_state=42, n_init=5)
+        # 拟合GMM（n_init=1 加速，单线程避免开销）
+        gmm = GaussianMixture(n_components=2, random_state=42, n_init=1)
         gmm.fit(X)
             
         means = gmm.means_.flatten()
