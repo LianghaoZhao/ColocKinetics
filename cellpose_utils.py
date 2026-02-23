@@ -50,7 +50,8 @@ def run_cellpose_on_files(
         print(f"Initializing Cellpose model (GPU={use_gpu}, device={gpu_device})...")
     
     # 1. 仅在这里加载一次模型到 GPU/CPU
-    model = models.Cellpose(gpu=use_gpu, gpu_device=gpu_device, model_type='cyto')
+    # Cellpose 4.x 使用 CellposeModel，默认模型为 cpsam (Cellpose-SAM)
+    model = models.CellposeModel(gpu=use_gpu, device=gpu_device, pretrained_model='cpsam')
     
     total_files = len(image_files)
     all_mask_files = []
