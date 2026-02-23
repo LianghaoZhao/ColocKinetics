@@ -379,9 +379,25 @@ def main():
     # 创建分析器
     analyzer = MainAnalyzer()
 
+    # 准备ND2搜索目录列表
+    nd2_search_dirs = []
+    # 添加原始图像文件所在的目录
+    for img_file in image_files:
+        img_dir = str(Path(img_file).parent)
+        if img_dir not in nd2_search_dirs:
+            nd2_search_dirs.append(img_dir)
+    # 添加输出目录及其父目录(可能包含原始ND2)
+    nd2_search_dirs.append(output_dir)
+    nd2_search_dirs.append(str(Path(output_dir).parent))
+    # 添加当前工作目录
+    if '.' not in nd2_search_dirs:
+        nd2_search_dirs.append('.')
+    
+    print(f"ND2 search directories: {nd2_search_dirs}")
+
     # 加载数据并匹配 mask
     print("\nLoading image and mask data...")
-    analyses = analyzer.process_files_with_masks(analysis_files, mask_pattern, args.skip_initial_frames)
+    analyses = analyzer.process_files_with_masks(analysis_files, mask_pattern, args.skip_initial_frames, nd2_search_dirs)
 
     if not analyses:
         print("No files were successfully processed (no matching masks found)")

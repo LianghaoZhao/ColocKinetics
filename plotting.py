@@ -110,7 +110,7 @@ class Visualizer:
                     ax.axvline(x=fit_results['t90'], color='purple', linestyle=':',
                                label=f't90: {fit_results["t90"]:.2f}', linewidth=2)
 
-            ax.set_xlabel('Time Point')
+            ax.set_xlabel('Time (s)')
             ax.set_ylabel('Pearson Correlation')
             # 添加延迟参数到标题（如果使用延迟模型）
             if fit_model == 'delayed_first_order' and not np.isnan(fit_results.get('delay', np.nan)):
@@ -185,7 +185,7 @@ class Visualizer:
                 ax1.axvline(x=corr_fit_results['t50'], color='orange', linestyle=':', label=f't50: {corr_fit_results["t50"]:.2f}', linewidth=2)
             if not np.isnan(corr_fit_results['t90']):
                 ax1.axvline(x=corr_fit_results['t90'], color='purple', linestyle=':', label=f't90: {corr_fit_results["t90"]:.2f}', linewidth=2)
-        ax1.set_xlabel('Time Point')
+        ax1.set_xlabel('Time (s)')
         ax1.set_ylabel('Pearson Correlation')
         if fit_model == 'delayed_first_order' and not np.isnan(corr_fit_results.get('delay', np.nan)):
             ax1.set_title(f'Cell {cell_id} - Correlation Over Time\nR²: {corr_fit_results["r_squared"]:.3f}, Delay: {corr_fit_results["delay"]:.3f}')
@@ -198,7 +198,7 @@ class Visualizer:
         # 2. P-value vs Time
         ax2 = axes[0, 1] if include_scatter else axes[0, 1]
         ax2.plot(time_points, p_values, 's-', color='red', linewidth=2, markersize=6)
-        ax2.set_xlabel('Time Point')
+        ax2.set_xlabel('Time (s)')
         ax2.set_ylabel('P-value')
         ax2.set_yscale('log')
         ax2.set_title(f'Cell {cell_id} - P-value Over Time')
@@ -211,7 +211,7 @@ class Visualizer:
             t_fit = np.linspace(ch1_time.min(), ch1_time.max(), 100)
             y_fit = fit_func(t_fit, ch1_fit_results['A0'], ch1_fit_results['k'], ch1_fit_results['A_inf'], ch1_fit_results.get('delay', 0))
             ax3.plot(t_fit, y_fit, '--', label='Fitted curve', color='red', linewidth=2)
-        ax3.set_xlabel('Time Point')
+        ax3.set_xlabel('Time (s)')
         ax3.set_ylabel('Intensity')
         if fit_model == 'delayed_first_order' and not np.isnan(ch1_fit_results.get('delay', np.nan)):
             ax3.set_title(f'Cell {cell_id} - Channel 1 Intensity\nR²: {ch1_fit_results["r_squared"]:.3f}, Delay: {ch1_fit_results["delay"]:.3f}')
@@ -227,7 +227,7 @@ class Visualizer:
             t_fit = np.linspace(ch2_time.min(), ch2_time.max(), 100)
             y_fit = fit_func(t_fit, ch2_fit_results['A0'], ch2_fit_results['k'], ch2_fit_results['A_inf'], ch2_fit_results.get('delay', 0))
             ax4.plot(t_fit, y_fit, '--', label='Fitted curve', color='red', linewidth=2)
-        ax4.set_xlabel('Time Point')
+        ax4.set_xlabel('Time (s)')
         ax4.set_ylabel('Intensity')
         if fit_model == 'delayed_first_order' and not np.isnan(ch2_fit_results.get('delay', np.nan)):
             ax4.set_title(f'Cell {cell_id} - Channel 2 Intensity\nR²: {ch2_fit_results["r_squared"]:.3f}, Delay: {ch2_fit_results["delay"]:.3f}')

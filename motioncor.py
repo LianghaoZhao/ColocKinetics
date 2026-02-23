@@ -643,12 +643,12 @@ def create_drift_visualization(cumulative_shifts, output_dir, base_name, sample_
     axes[0, 0].grid(True, alpha=0.3)
     axes[0, 0].set_xlim(x_min, x_max)
     axes[0, 0].set_ylim(y_min, y_max)
-    plt.colorbar(scatter, ax=axes[0, 0], label='Time Point')
+    plt.colorbar(scatter, ax=axes[0, 0], label='Frame Index')
 
     # 2. X方向时间序列
     axes[0, 1].plot(time_points, x_shifts, 'b-', linewidth=1.5, alpha=0.8)
     axes[0, 1].scatter(time_points, x_shifts, c=time_points, cmap='viridis', s=20, alpha=0.7)
-    axes[0, 1].set_xlabel('Time Point')
+    axes[0, 1].set_xlabel('Frame Index')
     axes[0, 1].set_ylabel('X Shift (pixels)')
     axes[0, 1].set_title('X Drift vs Time')
     axes[0, 1].grid(True, alpha=0.3)
@@ -657,7 +657,7 @@ def create_drift_visualization(cumulative_shifts, output_dir, base_name, sample_
     # 3. Y方向时间序列
     axes[1, 0].plot(time_points, y_shifts, 'r-', linewidth=1.5, alpha=0.8)
     axes[1, 0].scatter(time_points, y_shifts, c=time_points, cmap='viridis', s=20, alpha=0.7)
-    axes[1, 0].set_xlabel('Time Point')
+    axes[1, 0].set_xlabel('Frame Index')
     axes[1, 0].set_ylabel('Y Shift (pixels)')
     axes[1, 0].set_title('Y Drift vs Time')
     axes[1, 0].grid(True, alpha=0.3)
@@ -757,7 +757,7 @@ def create_summary_plot(all_shifts_data, output_dir):
         axes[0, 1].plot(time_points, x_shifts, color=colors[idx], alpha=0.7, linewidth=1.5,
                        label=Path(filename).stem)
 
-    axes[0, 1].set_xlabel('Time Point')
+    axes[0, 1].set_xlabel('Frame Index')
     axes[0, 1].set_ylabel('X Shift (pixels)')
     axes[0, 1].set_title('All Files - X Drift vs Time')
     axes[0, 1].grid(True, alpha=0.3)
@@ -771,7 +771,7 @@ def create_summary_plot(all_shifts_data, output_dir):
         axes[1, 0].plot(time_points, y_shifts, color=colors[idx], alpha=0.7, linewidth=1.5,
                        label=Path(filename).stem)
 
-    axes[1, 0].set_xlabel('Time Point')
+    axes[1, 0].set_xlabel('Frame Index')
     axes[1, 0].set_ylabel('Y Shift (pixels)')
     axes[1, 0].set_title('All Files - Y Drift vs Time')
     axes[1, 0].grid(True, alpha=0.3)

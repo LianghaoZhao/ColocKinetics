@@ -7,6 +7,7 @@ import re
 from natsort import natsorted
 from typing import Dict, List, Tuple, Optional
 from data_structures import FileData, CellData # Import data structures
+from nd2_metadata import get_nd2_timestamps, extract_position_from_filename, find_original_nd2_for_split_file
 
 
 class ImageReader:
@@ -158,13 +159,34 @@ def process_single_file_io(args):
     """
     处理单个文件的IO部分 (加载图像、蒙版，提取细胞数据，创建TimeSeriesAnalysis对象)
     Parameters:
-    - args: (image_file, mask_path, skip_initial_frames)
+    - args: (image_file, mask_path, skip_initial_frames, nd2_search_dirs)
     Returns:
     - TimeSeriesAnalysis object or None
     """
-    image_file, mask_path, skip_initial_frames = args
+    image_file, mask_path, skip_initial_frames, nd2_search_dirs = args
     if mask_path is None:
         return None
+    
+    # 检测是否是从ND2拆分的文件,并读取时间戳
+    timestamps = None
+    original_nd2_path = None
+    position_idx = None
+    
+    position_idx = extract_position_from_filename(image_file)
+    if position_idx is not None:
+        # 这是拆分后的文件
+        original_nd2_path = find_original_nd2_for_split_file(image_file, nd2_search_dirs)
+        if original_nd2_path:
+            timestamps = get_nd2_timestamps(original_nd2_path, position_idx)
+            if timestamps is not None:
+                print(f"Loaded {len(timestamps)} timestamps for position {position_idx} from {Path(original_nd2_path).name}")
+    elif image_file.lower().endswith('.nd2'):
+        # 直接是ND2文件
+        original_nd2_path = image_file
+        timestamps = get_nd2_timestamps(image_file)
+        if timestamps is not None:
+            print(f"Loaded {len(timestamps)} timestamps from {Path(image_file).name}")
+    
     # 读取蒙版
     try:
         mask = load_mask(mask_path)
@@ -211,7 +233,9 @@ def process_single_file_io(args):
     analysis = FileData(
         file_path=image_file,
         time_points=time_points,
-        skip_initial_frames=skip_initial_frames
+        skip_initial_frames=skip_initial_frames,
+        original_nd2_path=original_nd2_path,
+        position_index=position_idx
     )
 
     # 获取细胞ID - 确保是整数类型
@@ -222,6 +246,12 @@ def process_single_file_io(args):
 
     # 处理每个时间点
     for t in range(time_points):
+        # 获取真实时间
+        if timestamps is not None and t < len(timestamps):
+            actual_time = timestamps[t]
+        else:
+            actual_time = float(t)  # fallback到索引
+        
         # 获取当前时间点的图像
         if time_points > 1:
             current_img = img_array[t]  # shape: (channels, height, width) or (height, width) if single channel
@@ -258,7 +288,7 @@ def process_single_file_io(args):
                 channel1=channel1,
                 channel2=channel2,
                 file_path=image_file,
-                time_point=t,
+                time_point=actual_time,  # 使用真实时间
                 x_coords=x_coords,
                 y_coords=y_coords
             )

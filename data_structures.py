@@ -10,7 +10,7 @@ class CellData:
     channel1: np.ndarray  # 第一个通道的细胞区域数据
     channel2: np.ndarray  # 第二个通道的细胞区域数据
     file_path: str
-    time_point: int
+    time_point: float  # 真实时间(秒),而非索引
     x_coords: np.ndarray  # 细胞在原图中的x坐标
     y_coords: np.ndarray  # 细胞在原图中的y坐标
     # Note: pearson_corr and p_value are calculated elsewhere now
@@ -36,6 +36,8 @@ class FileData:
     cells: Dict[int, List[CellData]] = field(default_factory=dict)
     all_cells: List[CellData] = field(default_factory=list)  # 所有时间点的所有细胞
     skip_initial_frames: int = field(default=0)  # 跳过的初始帧数
+    original_nd2_path: Optional[str] = field(default=None)  # 存储原始ND2路径
+    position_index: Optional[int] = field(default=None)  # 拆分视野的P索引
 
     def add_cell_data(self, cell_data: CellData):
         """添加细胞数据"""

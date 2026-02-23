@@ -16,14 +16,33 @@ class MainAnalyzer:
     def __init__(self):
         self.all_files: List[FileData] = []
 
-    def process_files_with_masks(self, image_files: List[str], mask_pattern: Optional[str] = None, skip_initial_frames: int = 0) -> List[FileData]:
-        """处理多个图像文件，自动匹配蒙版（顺序处理）"""
+    def process_files_with_masks(self, image_files: List[str], mask_pattern: Optional[str] = None, skip_initial_frames: int = 0, nd2_search_dirs: Optional[List[str]] = None) -> List[FileData]:
+        """处理多个图像文件，自动匹配蒙版（顺序处理）
+        
+        Parameters:
+        - image_files: 图像文件列表
+        - mask_pattern: mask文件匹配模式
+        - skip_initial_frames: 跳过的初始帧数
+        - nd2_search_dirs: 搜索原始ND2文件的目录列表
+        """
+        # 如果未提供nd2_search_dirs,使用默认搜索路径
+        if nd2_search_dirs is None:
+            nd2_search_dirs = []
+            # 添加图像文件所在的目录
+            for img_file in image_files:
+                img_dir = str(Path(img_file).parent)
+                if img_dir not in nd2_search_dirs:
+                    nd2_search_dirs.append(img_dir)
+            # 添加当前工作目录
+            if '.' not in nd2_search_dirs:
+                nd2_search_dirs.append('.')
+        
         # 首先匹配所有图像文件和蒙版
         matches = MaskFileMatcher.match_image_with_masks(image_files, mask_pattern)
 
         for image_file in image_files:
             mask_path = matches[image_file]
-            io_result = process_single_file_io((image_file, mask_path, skip_initial_frames))
+            io_result = process_single_file_io((image_file, mask_path, skip_initial_frames, nd2_search_dirs))
             if io_result is not None:
                 self.all_files.append(io_result)
         return self.all_files
