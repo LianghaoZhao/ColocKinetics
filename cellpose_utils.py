@@ -16,10 +16,11 @@ def run_cellpose_on_files(
     save_png: bool = True,
     verbose: bool = True,
     niter: Optional[int] = None,
-    cp_channel_wavelength: Optional[float] = None
+    cp_channel_wavelength: Optional[float] = None,
+    batch_size: int = 10
 ) -> List[str]:
     """
-    对图像文件列表运行 Cellpose 生成 mask (使用 CLI 命令行)
+    对图像文件列表运行 Cellpose 生成 mask (使用 Python API，模型只加载一次，分批读取避免爆内存)
     
     Parameters:
     - image_files: 图像文件路径列表
@@ -31,90 +32,122 @@ def run_cellpose_on_files(
     - verbose: 是否显示详细输出
     - niter: Cellpose dynamics 迭代次数（None 则使用 Cellpose 默认值）
     - cp_channel_wavelength: Cellpose 分割用通道波长（None 则使用全部通道）
+    - batch_size: 每批次处理的图像数量（默认 10，避免内存爆炸）
     
     Returns:
     - 生成的 mask 文件路径列表
     """
-    # 使用绝对路径确保 cellpose 正确保存到指定目录
+    from cellpose import models, io
+    
+    # 使用绝对路径确保正确保存到指定目录
     output_dir = str(Path(output_dir).resolve())
     os.makedirs(output_dir, exist_ok=True)
     
-    mask_files = []
+    if not image_files:
+        return []
     
-    for image_file in image_files:
-        image_path = Path(image_file).resolve()  # 使用绝对路径
-        
-        # 构建 cellpose 命令
-        cmd = [
-            "cellpose",
-            "--image_path", str(image_path),
-            "--diameter", str(diameter),
-            "--savedir", output_dir,
-            # Cellpose 4.x 默认保存 npy 文件
-        ]
-        
-        if use_gpu:
-            cmd.extend(["--use_gpu", "--gpu_device", str(gpu_device)])
-        
-        if save_png:
-            cmd.append("--save_png")
-        
-        if niter is not None:
-            cmd.extend(["--niter", str(niter)])
+    if verbose:
+        print(f"Initializing Cellpose model (GPU={use_gpu}, device={gpu_device})...")
+    
+    # 1. 仅在这里加载一次模型到 GPU/CPU
+    model = models.Cellpose(gpu=use_gpu, gpu_device=gpu_device, model_type='cyto')
+    
+    total_files = len(image_files)
+    all_mask_files = []
+    
+    if verbose:
+        print(f"Processing {total_files} images in batches of {batch_size}...")
+    
+    # 2. 分批处理：每批读取 -> 预测 -> 保存 -> 释放内存
+    for batch_idx in range(0, total_files, batch_size):
+        batch_end = min(batch_idx + batch_size, total_files)
+        batch_files = image_files[batch_idx:batch_end]
         
         if verbose:
-            cmd.append("--verbose")
-            print(f"Running Cellpose on: {image_path.name}")
-            print(f"  Command: {' '.join(cmd)}")
+            print(f"\nBatch {batch_idx//batch_size + 1}: processing {len(batch_files)} images ({batch_idx}-{batch_end-1}/{total_files})")
         
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+        # 2.1 读取当前批次图片
+        imgs = []
+        valid_files = []
+        
+        for image_file in batch_files:
+            try:
+                img = io.imread(image_file)
+                imgs.append(img)
+                valid_files.append(image_file)
+                if verbose:
+                    print(f"  Loaded: {Path(image_file).name} (shape: {img.shape})")
+            except Exception as e:
+                print(f"  Error loading {Path(image_file).name}: {e}")
+        
+        if not imgs:
+            print("  Warning: No images loaded in this batch")
+            continue
+        
+        # 2.2 构建 eval 参数字典
+        eval_kwargs = {
+            'diameter': diameter,
+            'channels': [0, 0],  # 默认使用所有通道
+            'verbose': False,  # 批次内不显示详细输出
+        }
+        
+        # 添加 niter 参数（如果指定）
+        if niter is not None:
+            eval_kwargs['niter'] = niter
+        
+        # 2.3 批量运行预测
+        if verbose:
+            print(f"  Running Cellpose evaluation on {len(imgs)} images...")
+        
+        masks, flows, styles, diams = model.eval(imgs, **eval_kwargs)
+        
+        # 2.4 批量保存结果
+        if verbose:
+            print(f"  Saving {len(masks)} masks...")
+        
+        for i, (image_file, mask) in enumerate(zip(valid_files, masks)):
+            image_path = Path(image_file)
+            
+            # 生成输出文件名（与 CLI 版本兼容的命名格式）
+            output_name = f"{image_path.stem}_seg.npy"
+            output_path = Path(output_dir) / output_name
+            
+            # 保存 mask 为 npy 文件
+            np.save(str(output_path), mask)
+            all_mask_files.append(str(output_path))
             
             if verbose:
-                if result.stdout:
-                    print(result.stdout)
+                print(f"    Saved mask: {output_path.name}")
             
-            # 查找生成的 mask 文件
-            # Cellpose 4.x 输出格式: {filename}_seg.npy 或 {filename}_cp_masks.npy/tif
-            possible_patterns = [
-                f"{image_path.stem}_seg.npy",
-                f"{image_path.stem}_cp_masks.npy",
-                f"{image_path.stem}_cp_masks.tif",
-                f"{image_path.stem}*_seg.npy",
-                f"{image_path.stem}*_masks.npy",
-            ]
-            
-            found_mask = None
-            for pattern in possible_patterns:
-                matches = list(Path(output_dir).glob(pattern))
-                if matches:
-                    found_mask = str(matches[0])
-                    break
-            
-            if found_mask:
-                mask_files.append(found_mask)
-                if verbose:
-                    print(f"  -> Mask saved: {Path(found_mask).name}")
-            else:
-                # 列出目录中的所有文件帮助调试
-                all_files = list(Path(output_dir).glob(f"{image_path.stem}*"))
-                print(f"  Warning: Mask file not found for {image_path.name}")
-                print(f"  Files in {output_dir}: {[f.name for f in all_files]}")
-                    
-        except subprocess.CalledProcessError as e:
-            print(f"  Error running Cellpose on {image_path.name}: {e}")
-            if e.stderr:
-                print(f"  stderr: {e.stderr}")
-        except FileNotFoundError:
-            print("Error: Cellpose not found. Please install it with: pip install cellpose")
-            raise
+            # 可选：保存 PNG 可视化
+            if save_png:
+                try:
+                    png_path = Path(output_dir) / f"{image_path.stem}_seg.png"
+                    # 创建 RGB 可视化
+                    from matplotlib import pyplot as plt
+                    plt.figure(figsize=(10, 10))
+                    plt.imshow(mask > 0, cmap='gray')
+                    plt.axis('off')
+                    plt.tight_layout()
+                    plt.savefig(str(png_path), dpi=150, bbox_inches='tight')
+                    plt.close()
+                    if verbose:
+                        print(f"    Saved PNG: {png_path.name}")
+                except Exception as e:
+                    if verbose:
+                        print(f"    Warning: Failed to save PNG visualization: {e}")
+        
+        # 2.5 显式释放当前批次数据（帮助垃圾回收）
+        del imgs, masks, flows, styles, diams
+        if use_gpu:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     
-    return mask_files
+    if verbose:
+        print(f"\nCellpose completed. Generated {len(all_mask_files)} masks in total.")
+    
+    return all_mask_files
 
 
 def find_existing_masks(image_files: List[str], mask_dir: str) -> dict:
@@ -231,11 +264,13 @@ def extract_first_frame_from_nd2(image_files: List[str], output_dir: str, channe
                     ch_idx = find_closest_channel_index(channel_infos, cp_channel_wavelength)
                     if ch_idx is not None and first_frame.ndim >= 2:
                         # 如果 first_frame 是多通道 (C, H, W)
+                        print(f"  Debug: first_frame.shape={first_frame.shape}, ch_idx={ch_idx}")
                         if first_frame.ndim == 3 and ch_idx < first_frame.shape[0]:
                             first_frame = first_frame[ch_idx]  # 提取单通道 (H, W)
                             print(f"  Cellpose: using channel index {ch_idx} (wavelength ~{cp_channel_wavelength}nm) for {image_path.name}")
                         else:
                             print(f"  Warning: failed to extract channel {ch_idx} from {image_path.name}, using all channels")
+                            print(f"    Reason: ndim={first_frame.ndim}, shape={first_frame.shape}")
                     else:
                         print(f"  Warning: failed to map wavelength {cp_channel_wavelength}nm for {image_path.name}, using all channels")
             

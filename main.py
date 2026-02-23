@@ -194,14 +194,25 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
     return corrected_files
 
 
-def run_cellpose_segmentation(image_files, output_dir, diameter=380, gpu_device=0, use_gpu=True, niter=None, cp_channel_wavelength=None, gamma=0.5):
+def run_cellpose_segmentation(image_files, output_dir, diameter=380, gpu_device=0, use_gpu=True, niter=None, cp_channel_wavelength=None, gamma=0.5, batch_size=10):
     """
     运行 Cellpose 分割
+    
+    Parameters:
+    - image_files: 图像文件列表
+    - output_dir: 输出目录
+    - diameter: 细胞直径
+    - gpu_device: GPU 设备 ID
+    - use_gpu: 是否使用 GPU
+    - niter: 动力学迭代次数
+    - cp_channel_wavelength: 分割通道波长
+    - gamma: Gamma 校正值
+    - batch_size: 每批次处理的图像数量（避免内存爆炸）
     
     Returns:
     - mask 文件路径字典 {image_file: mask_file}
     """
-    # 统一使用 mask 目录，提取帧和生成mask都在这里
+    # 统一使用 mask 目录，提取帧和生成 mask 都在这里
     mask_dir = Path(output_dir) / 'mask'
     mask_dir.mkdir(parents=True, exist_ok=True)
     
@@ -220,7 +231,7 @@ def run_cellpose_segmentation(image_files, output_dir, diameter=380, gpu_device=
             # 运行 Cellpose（输出到同一目录）
             niter_info = f", niter={niter}" if niter is not None else ""
             gamma_info = f", gamma={gamma}" if gamma != 1.0 else ""
-            print(f"\nRunning Cellpose (diameter={diameter}, gpu_device={gpu_device}{niter_info}{gamma_info})...")
+            print(f"\nRunning Cellpose (diameter={diameter}, gpu_device={gpu_device}{niter_info}{gamma_info}, batch_size={batch_size})...")
             run_cellpose_on_files(
                 extracted_frames,
                 str(mask_dir),
@@ -228,7 +239,8 @@ def run_cellpose_segmentation(image_files, output_dir, diameter=380, gpu_device=
                 gpu_device=gpu_device,
                 use_gpu=use_gpu,
                 niter=niter,
-                cp_channel_wavelength=None  # extract_first_frame 已经处理了通道选择
+                cp_channel_wavelength=None,  # extract_first_frame 已经处理了通道选择
+                batch_size=batch_size
             )
         
         # 重新查找 mask
@@ -281,6 +293,8 @@ def main():
                        help='Cellpose: segmentation channel(s) by wavelength, e.g. "488" or "561" (single channel for segmentation)')
     parser.add_argument('--cp-gamma', type=float, default=0.5,
                        help='Cellpose: gamma correction for image preprocessing (default: 0.5, set to 1.0 to disable)')
+    parser.add_argument('--cp-batch-size', type=int, default=10,
+                       help='Cellpose: batch size for processing images (default: 10, reduce to save memory)')
     
     # 分析参数
     parser.add_argument('--skip-initial-frames', type=int, default=0,
@@ -388,7 +402,8 @@ def main():
             use_gpu=not args.cp_no_gpu,
             niter=args.cp_niter,
             cp_channel_wavelength=cp_channel_wavelength,
-            gamma=args.cp_gamma
+            gamma=args.cp_gamma,
+            batch_size=args.cp_batch_size
         )
         
         # 检查是否所有文件都有 mask
