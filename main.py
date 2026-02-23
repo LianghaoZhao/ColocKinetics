@@ -23,6 +23,9 @@ ColocKinetics: ND2/TIF Co-localization Analysis Pipeline
 5. 使用已有的 mask 文件:
    python main.py "*.nd2" --mask-pattern "masks/*.npy" --skip-cellpose
 
+6. 跳过分析步骤，只重新生成可视化（用于调整过滤参数）:
+   python main.py "*.nd2" --skip-motioncor --skip-cellpose --skip-analysis
+
 更多参数请使用 python main.py --help 查看
 """
 
@@ -35,6 +38,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import warnings
 from multiprocessing import Pool
+import pickle
 
 # 模块导入
 from analyzer import MainAnalyzer
@@ -322,6 +326,8 @@ def main():
                        help='Skip Cellpose segmentation (use existing masks)')
     parser.add_argument('--mask-pattern', type=str, default=None,
                        help='Pattern for existing mask files (e.g., "masks/*.npy")')
+    parser.add_argument('--skip-analysis', action='store_true',
+                       help='Skip co-localization analysis, load from saved results (analysis_cache.pkl)')
     
     # Motion correction 参数
     parser.add_argument('--mc-max-iterations', type=int, default=10,
@@ -508,73 +514,101 @@ def main():
                 mask_pattern = None
     
     # Step 3: Co-localization Analysis (共定位分析)
-    print("\n" + "=" * 60)
-    print("Step 3: Co-localization Analysis")
-    print("=" * 60)
-
-    # 创建分析器
-    analyzer = MainAnalyzer()
-
-    # 准备ND2搜索目录列表
-    nd2_search_dirs = []
-    # 添加原始图像文件所在的目录
-    for img_file in image_files:
-        img_dir = str(Path(img_file).parent)
-        if img_dir not in nd2_search_dirs:
-            nd2_search_dirs.append(img_dir)
-    # 添加输出目录及其父目录(可能包含原始ND2)
-    nd2_search_dirs.append(output_dir)
-    nd2_search_dirs.append(str(Path(output_dir).parent))
-    # 添加当前工作目录
-    if '.' not in nd2_search_dirs:
-        nd2_search_dirs.append('.')
+    cache_file = os.path.join(output_dir, 'analysis_cache.pkl')
     
-    print(f"ND2 search directories: {nd2_search_dirs}")
+    if args.skip_analysis and os.path.exists(cache_file):
+        # 从缓存加载分析结果
+        print("\n" + "=" * 60)
+        print("Step 3: Co-localization Analysis (loading from cache)")
+        print("=" * 60)
+        print(f"Loading cached analysis from: {cache_file}")
+        
+        with open(cache_file, 'rb') as f:
+            cache_data = pickle.load(f)
+        
+        analyzer = cache_data['analyzer']
+        reaction_df = cache_data['reaction_df']
+        summary_df = cache_data['summary_df']
+        
+        print(f"Loaded {len(analyzer.all_files)} files, {len(reaction_df)} cells from cache")
+    else:
+        print("\n" + "=" * 60)
+        print("Step 3: Co-localization Analysis")
+        print("=" * 60)
 
-    # 加载数据并匹配 mask
-    print("\nLoading image and mask data...")
-    analyses = analyzer.process_files_with_masks(
-        analysis_files, mask_pattern, 
-        skip_initial_frames=args.skip_initial_frames, 
-        max_frames=args.max_frames,
-        nd2_search_dirs=nd2_search_dirs, 
-        channels=analysis_channels
-    )
+        # 创建分析器
+        analyzer = MainAnalyzer()
 
-    if not analyses:
-        print("No files were successfully processed (no matching masks found)")
-        return
+        # 准备ND2搜索目录列表
+        nd2_search_dirs = []
+        # 添加原始图像文件所在的目录
+        for img_file in image_files:
+            img_dir = str(Path(img_file).parent)
+            if img_dir not in nd2_search_dirs:
+                nd2_search_dirs.append(img_dir)
+        # 添加输出目录及其父目录(可能包含原始ND2)
+        nd2_search_dirs.append(output_dir)
+        nd2_search_dirs.append(str(Path(output_dir).parent))
+        # 添加当前工作目录
+        if '.' not in nd2_search_dirs:
+            nd2_search_dirs.append('.')
+        
+        print(f"ND2 search directories: {nd2_search_dirs}")
 
-    # 获取汇总数据 (共定位指标)
-    print("Calculating co-localization metrics...")
-    summary_df = analyzer.get_summary_dataframe()
-    print(f"\nProcessed {len(summary_df)} cell-time points")
-    print("First few rows (showing key information):")
-    display_cols = ['file_path', 'cell_id', 'time_point', 'pearson_corr', 'p_value', 'n_pixels']
-    display_df = summary_df[display_cols].copy()
-    display_df['file_path'] = display_df['file_path'].apply(lambda x: Path(x).name)  # 只显示文件名
-    print(display_df.head())
+        # 加载数据并匹配 mask
+        print("\nLoading image and mask data...")
+        analyses = analyzer.process_files_with_masks(
+            analysis_files, mask_pattern, 
+            skip_initial_frames=args.skip_initial_frames, 
+            max_frames=args.max_frames,
+            nd2_search_dirs=nd2_search_dirs, 
+            channels=analysis_channels
+        )
 
-    # 执行完整分析 (共定位计算 -> 拟合)
-    print(f"\nPerforming {args.fit_model} reaction fitting (parallel - file level)...")
-    reaction_df = analyzer.run_full_analysis(fit_model=args.fit_model)
+        if not analyses:
+            print("No files were successfully processed (no matching masks found)")
+            return
 
-    print(f"Reaction fitting results for {len(reaction_df)} cells:")
-    print("First few rows of reaction fitting:")
-    reaction_display = reaction_df[['file_path', 'cell_id', 'correlation_k', 'correlation_t50', 'correlation_t90', 'correlation_r_squared']].copy()
-    reaction_display['file_path'] = reaction_display['file_path'].apply(lambda x: Path(x).name)
-    print(reaction_display.head())
+        # 获取汇总数据 (共定位指标)
+        print("Calculating co-localization metrics...")
+        summary_df = analyzer.get_summary_dataframe()
+        print(f"\nProcessed {len(summary_df)} cell-time points")
+        print("First few rows (showing key information):")
+        display_cols = ['file_path', 'cell_id', 'time_point', 'pearson_corr', 'p_value', 'n_pixels']
+        display_df = summary_df[display_cols].copy()
+        display_df['file_path'] = display_df['file_path'].apply(lambda x: Path(x).name)  # 只显示文件名
+        print(display_df.head())
 
-    # 保存结果
-    if args.save_results:
-        # 保存基础汇总数据
-        output_file = os.path.join(output_dir, 'correlation_analysis_results.csv')
-        summary_df.to_csv(output_file, index=False)
-        print(f"Basic co-localization results saved to: {output_file}")
-        # 保存反应拟合结果
-        reaction_output_file = os.path.join(output_dir, 'reaction_fitting_results.csv')
-        reaction_df.to_csv(reaction_output_file, index=False)
-        print(f"Reaction fitting results saved to: {reaction_output_file}")
+        # 执行完整分析 (共定位计算 -> 拟合)
+        print(f"\nPerforming {args.fit_model} reaction fitting (parallel - file level)...")
+        reaction_df = analyzer.run_full_analysis(fit_model=args.fit_model)
+
+        print(f"Reaction fitting results for {len(reaction_df)} cells:")
+        print("First few rows of reaction fitting:")
+        reaction_display = reaction_df[['file_path', 'cell_id', 'correlation_k', 'correlation_t50', 'correlation_t90', 'correlation_r_squared']].copy()
+        reaction_display['file_path'] = reaction_display['file_path'].apply(lambda x: Path(x).name)
+        print(reaction_display.head())
+
+        # 保存分析缓存（用于 --skip-analysis）
+        print(f"\nSaving analysis cache to: {cache_file}")
+        cache_data = {
+            'analyzer': analyzer,
+            'reaction_df': reaction_df,
+            'summary_df': summary_df
+        }
+        with open(cache_file, 'wb') as f:
+            pickle.dump(cache_data, f)
+
+        # 保存CSV结果
+        if args.save_results:
+            # 保存基础汇总数据
+            output_file = os.path.join(output_dir, 'correlation_analysis_results.csv')
+            summary_df.to_csv(output_file, index=False)
+            print(f"Basic co-localization results saved to: {output_file}")
+            # 保存反应拟合结果
+            reaction_output_file = os.path.join(output_dir, 'reaction_fitting_results.csv')
+            reaction_df.to_csv(reaction_output_file, index=False)
+            print(f"Reaction fitting results saved to: {reaction_output_file}")
 
     # 可视化 (调用 plotting 模块)
     print("\nGenerating visualizations...")

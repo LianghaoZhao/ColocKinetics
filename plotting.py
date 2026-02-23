@@ -194,20 +194,20 @@ class Visualizer:
                 
                 # 构建下方标签文本：红绿信号强度 + 面积 + 颜色方块
                 # 使用 xlabel 下方的空间
-                info_text = f'R:{red_intensity:.0f}  G:{green_intensity:.0f}  Area:{cell_size}px'
+                info_text = f'R:{red_intensity:.0f}  G:{green_intensity:.0f}  Area:{cell_size}'
                 ax.text(0.5, -0.22, info_text, transform=ax.transAxes, fontsize=8,
                        ha='center', va='top')
                 
-                # 红色方框 - 颜色深浅表示强度（放在文字下方）
+                # 红色方框 - 颜色深浅表示强度（正方形，与文字在同一行）
                 red_color = (1.0, 1.0 - red_norm * 0.8, 1.0 - red_norm * 0.8)  # 从浅粉到深红
-                rect_red = plt.Rectangle((0.35, -0.32), 0.12, 0.06, transform=ax.transAxes,
+                rect_red = plt.Rectangle((0.35, -0.26), 0.06, 0.06, transform=ax.transAxes,
                                          facecolor=red_color, edgecolor='darkred', linewidth=1.5,
                                          clip_on=False)
                 ax.add_patch(rect_red)
                 
-                # 绿色方框 - 颜色深浅表示强度
+                # 绿色方框 - 颜色深浅表示强度（正方形，与文字在同一行）
                 green_color = (1.0 - green_norm * 0.8, 1.0, 1.0 - green_norm * 0.8)  # 从浅绿到深绿
-                rect_green = plt.Rectangle((0.53, -0.32), 0.12, 0.06, transform=ax.transAxes,
+                rect_green = plt.Rectangle((0.59, -0.26), 0.06, 0.06, transform=ax.transAxes,
                                            facecolor=green_color, edgecolor='darkgreen', linewidth=1.5,
                                            clip_on=False)
                 ax.add_patch(rect_green)
@@ -494,17 +494,6 @@ class Visualizer:
                 if np.isnan(t50):
                     continue
                     
-                # 获取第一个和最后一个有效时间点的pearson相关系数
-                time_points_arr, correlations_arr, _ = CoLocalizationMetrics.get_correlation_over_time_of_a_cell(analysis, cell_id)
-                if len(correlations_arr) < 2:
-                    continue
-                first_pearson = correlations_arr[0]
-                last_pearson = correlations_arr[-1]
-                pearson_change = last_pearson - first_pearson  # 变化量（通常为负，因为相关系数下降）
-                
-                if np.isnan(first_pearson) or np.isnan(last_pearson):
-                    continue
-                
                 ratio_data.append({
                     'file_path': file_path,
                     'file_stem': file_stem,
@@ -513,8 +502,7 @@ class Visualizer:
                     'green': green_value,
                     'ratio': ratio,
                     'n_pixels': first_cell_data.n_pixels,  # 细胞面积（像素数）
-                    't50': t50,
-                    'pearson_change': pearson_change  # 第一个点到最后一个点的pearson变化
+                    't50': t50
                 })
             
         if len(ratio_data) == 0:
@@ -527,7 +515,6 @@ class Visualizer:
         ratio_values = np.array([d['ratio'] for d in ratio_data])
         t50_values = np.array([d['t50'] for d in ratio_data])
         area_values = np.array([d['n_pixels'] for d in ratio_data])
-        pearson_change_values = np.array([d['pearson_change'] for d in ratio_data])
         
         print(f"  Total cells with valid data: {len(ratio_data)}")
         
@@ -562,18 +549,30 @@ class Visualizer:
         else:
             print("  T50 filter: no positive T50 values found")
             
-        # === 第3步：Pearson变化过滤（IQR方法）===
-        pc_q1 = np.percentile(pearson_change_values, 25)
-        pc_q3 = np.percentile(pearson_change_values, 75)
-        pc_iqr = pc_q3 - pc_q1
-        pc_lower = pc_q1 - 1.5 * pc_iqr
-        pc_upper = pc_q3 + 1.5 * pc_iqr
-        pearson_valid = (pearson_change_values >= pc_lower) & (pearson_change_values <= pc_upper)
-        n_pearson_removed = np.sum(~pearson_valid)
-        print(f"  Pearson change filter (IQR): removed {n_pearson_removed} cells (delta < {pc_lower:.3f} or > {pc_upper:.3f})")
+        # === 第3步：1/红色强度过滤（IQR方法）===
+        red_inv_values = 1.0 / red_values
+        red_inv_q1 = np.percentile(red_inv_values, 25)
+        red_inv_q3 = np.percentile(red_inv_values, 75)
+        red_inv_iqr = red_inv_q3 - red_inv_q1
+        red_inv_lower = red_inv_q1 - 1.5 * red_inv_iqr
+        red_inv_upper = red_inv_q3 + 1.5 * red_inv_iqr
+        red_inv_valid = (red_inv_values >= red_inv_lower) & (red_inv_values <= red_inv_upper)
+        n_red_inv_removed = np.sum(~red_inv_valid)
+        print(f"  1/Red filter (IQR): removed {n_red_inv_removed} cells (1/red < {red_inv_lower:.6f} or > {red_inv_upper:.6f})")
+        
+        # === 第4步：1/绿色强度过滤（IQR方法）===
+        green_inv_values = 1.0 / green_values
+        green_inv_q1 = np.percentile(green_inv_values, 25)
+        green_inv_q3 = np.percentile(green_inv_values, 75)
+        green_inv_iqr = green_inv_q3 - green_inv_q1
+        green_inv_lower = green_inv_q1 - 1.5 * green_inv_iqr
+        green_inv_upper = green_inv_q3 + 1.5 * green_inv_iqr
+        green_inv_valid = (green_inv_values >= green_inv_lower) & (green_inv_values <= green_inv_upper)
+        n_green_inv_removed = np.sum(~green_inv_valid)
+        print(f"  1/Green filter (IQR): removed {n_green_inv_removed} cells (1/green < {green_inv_lower:.6f} or > {green_inv_upper:.6f})")
             
         # === 组合所有过滤条件 ===
-        valid_mask = area_valid & t50_valid & pearson_valid
+        valid_mask = area_valid & t50_valid & red_inv_valid & green_inv_valid
         print(f"  Valid cells after all filters: {np.sum(valid_mask)}")
             
         # 过滤后的数据
