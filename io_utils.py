@@ -332,7 +332,14 @@ def process_single_file_io(args):
 
     # 获取图像信息
     shape = img_array.shape
-    if len(shape) == 4:
+    if len(shape) == 5:
+        # 5D数组: (P, T, C, H, W) - 多视野ND2文件，需要先拆分
+        raise ValueError(
+            f"Unexpected 5D image shape: {shape}. "
+            f"This appears to be a multi-position ND2 file (P={shape[0]}, T={shape[1]}, C={shape[2]}). "
+            f"Please run motion correction first to split positions, or use --motioncor-dir to specify existing split files."
+        )
+    elif len(shape) == 4:
         time_points, channels, height, width = shape
     elif len(shape) == 3:
         # 判断是否为多通道单时间点或单通道多时间点

@@ -15,7 +15,8 @@ with nd2.ND2File(nd2_file_path) as f:
     print("基本信息")
     print("=" * 80)
     print(f"形状 (shape): {f.shape}")
-    print(f"维度 (axes): {f.sizes}")
+    print(f"axes顺序: {''.join(f.sizes.keys())}")
+    print(f"维度 (sizes): {f.sizes}")
     print(f"数据类型: {f.dtype}")
     print()
     

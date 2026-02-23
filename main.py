@@ -74,6 +74,59 @@ def find_corrected_files(motioncor_dir, original_files):
     return corrected
 
 
+def find_corrected_files_for_skip_motioncor(original_files, motioncor_dir):
+    """
+    当使用 --skip-motioncor 时，查找已有的校正/拆分文件
+    支持多视野ND2拆分后的文件 (如 xxx_P0_corrected.ome.tif, xxx_P1_corrected.ome.tif)
+    
+    Parameters:
+    - original_files: 原始文件列表
+    - motioncor_dir: motioncor 输出目录
+    
+    Returns:
+    - 找到的校正文件列表（如果有多视野拆分，返回所有拆分文件）
+    """
+    motioncor_dir = Path(motioncor_dir)
+    corrected_files = []
+    
+    for orig in original_files:
+        base_name = Path(orig).stem
+        
+        # 首先尝试查找单视野校正文件
+        single_corrected = motioncor_dir / f"{base_name}_corrected.ome.tif"
+        if single_corrected.exists():
+            corrected_files.append(str(single_corrected))
+            print(f"  Found: {single_corrected.name}")
+            continue
+        
+        # 查找多视野拆分后的校正文件 (xxx_P0_corrected.ome.tif, xxx_P1_corrected.ome.tif, ...)
+        split_pattern = motioncor_dir / f"{base_name}_P*_corrected.ome.tif"
+        split_files = sorted(glob.glob(str(split_pattern)))
+        if split_files:
+            print(f"  Found {len(split_files)} split positions for {Path(orig).name}:")
+            for sf in split_files:
+                print(f"    - {Path(sf).name}")
+                corrected_files.append(sf)
+            continue
+        
+        # 查找拆分但未校正的文件 (xxx_P0.tif, xxx_P1.tif, ...)
+        split_uncorrected_pattern = motioncor_dir / f"{base_name}_P*.tif"
+        split_uncorrected = sorted(glob.glob(str(split_uncorrected_pattern)))
+        # 排除已经是 _corrected 的文件
+        split_uncorrected = [f for f in split_uncorrected if '_corrected' not in f]
+        if split_uncorrected:
+            print(f"  Found {len(split_uncorrected)} split (uncorrected) positions for {Path(orig).name}:")
+            for sf in split_uncorrected:
+                print(f"    - {Path(sf).name}")
+                corrected_files.append(sf)
+            continue
+        
+        # 没找到任何对应文件
+        print(f"  No corrected/split files found for {Path(orig).name}")
+    
+    return corrected_files
+
+
 def split_nd2_by_position(image_file, output_dir):
     """如果 ND2 文件包含多个位置 (P 维度 > 1)，将其按视野拆分为多个 TIF 文件。
     返回用于后续 motioncor 处理的文件列表。
@@ -88,7 +141,7 @@ def split_nd2_by_position(image_file, output_dir):
             if 'P' not in sizes or sizes['P'] <= 1:
                 return [image_file]
 
-            axes = f.axes
+            axes = ''.join(sizes.keys())  # 从 sizes 字典获取维度顺序字符串
             if not all(ax in axes for ax in ['T', 'C', 'Y', 'X']):
                 print(f"Multi-position ND2 with unsupported axes {axes}, fallback to original")
                 return [image_file]
@@ -386,7 +439,18 @@ def main():
         print(f"\nMotion correction completed: {len(corrected_files)} files")
     else:
         print("\nSkipping motion correction (--skip-motioncor)")
-        analysis_files = image_files
+        # 尝试查找已有的校正/拆分文件
+        motioncor_dir = Path(output_dir) / 'motioncor'
+        if motioncor_dir.exists():
+            existing_corrected = find_corrected_files_for_skip_motioncor(image_files, motioncor_dir)
+            if existing_corrected:
+                print(f"Found {len(existing_corrected)} existing corrected/split files in {motioncor_dir}")
+                analysis_files = existing_corrected
+            else:
+                print(f"No corrected files found in {motioncor_dir}, using original files")
+                analysis_files = image_files
+        else:
+            analysis_files = image_files
     
     # Step 2: Cellpose Segmentation (细胞分割)
     if not args.skip_cellpose and not args.mask_pattern:
