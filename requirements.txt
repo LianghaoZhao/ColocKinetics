@@ -10,6 +10,12 @@ pandas>=1.3.0
 # Scientific computations (e.g., curve fitting, statistics)
 scipy>=1.7.0
 
+# Machine learning (GMM, etc.)
+scikit-learn>=1.0.0
+
+# Statistical modeling (OLS, Cook's Distance)
+statsmodels>=0.13.0
+
 # Image processing and I/O
 scikit-image>=0.18.0
 

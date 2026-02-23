@@ -10,6 +10,7 @@ from coloc_metrics import CoLocalizationMetrics
 from typing import Tuple, List, Dict
 from scipy import stats
 from sklearn.mixture import GaussianMixture
+import statsmodels.api as sm
 import os
 
 # 限制sklearn/numpy的线程数，避免细粒度并行开销
@@ -192,22 +193,22 @@ class Visualizer:
                 else:
                     green_norm = 0.5
                 
-                # 构建下方标签文本：红绿信号强度 + 面积 + 颜色方块
-                # 使用 xlabel 下方的空间
-                info_text = f'R:{red_intensity:.0f}  G:{green_intensity:.0f}  Area:{cell_size}'
-                ax.text(0.5, -0.22, info_text, transform=ax.transAxes, fontsize=8,
-                       ha='center', va='top')
+                # 构建下方标签：R、G、Area文字 + 红绿正方形色块，都在一行横向排列
+                # 文字左对齐，矩形紧跟在文字后面
+                info_text = f'R:{red_intensity:.0f}  G:{green_intensity:.0f}  Area:{cell_size}  '
+                ax.text(0.05, -0.22, info_text, transform=ax.transAxes, fontsize=8,
+                       ha='left', va='top')
                 
-                # 红色方框 - 颜色深浅表示强度（正方形，与文字在同一行）
+                # 红色正方形 - 颜色深浅表示强度（紧跟在文字后面）
                 red_color = (1.0, 1.0 - red_norm * 0.8, 1.0 - red_norm * 0.8)  # 从浅粉到深红
-                rect_red = plt.Rectangle((0.35, -0.26), 0.06, 0.06, transform=ax.transAxes,
+                rect_red = plt.Rectangle((0.57, -0.26), 0.06, 0.06, transform=ax.transAxes,
                                          facecolor=red_color, edgecolor='darkred', linewidth=1.5,
                                          clip_on=False)
                 ax.add_patch(rect_red)
                 
-                # 绿色方框 - 颜色深浅表示强度（正方形，与文字在同一行）
+                # 绿色正方形 - 颜色深浅表示强度（紧跟在红色方框后面）
                 green_color = (1.0 - green_norm * 0.8, 1.0, 1.0 - green_norm * 0.8)  # 从浅绿到深绿
-                rect_green = plt.Rectangle((0.59, -0.26), 0.06, 0.06, transform=ax.transAxes,
+                rect_green = plt.Rectangle((0.65, -0.26), 0.06, 0.06, transform=ax.transAxes,
                                            facecolor=green_color, edgecolor='darkgreen', linewidth=1.5,
                                            clip_on=False)
                 ax.add_patch(rect_green)
@@ -485,13 +486,14 @@ class Visualizer:
                     
                 ratio = red_value / green_value
                     
-                # 获取T50
+                # 获取T50和T90
                 mask = (reaction_df['file_path'] == file_path) & (reaction_df['cell_id'] == cell_id)
                 if mask.sum() == 0:
                     continue
                     
                 t50 = reaction_df.loc[mask, 'correlation_t50'].values[0]
-                if np.isnan(t50):
+                t90 = reaction_df.loc[mask, 'correlation_t90'].values[0]
+                if np.isnan(t50) or np.isnan(t90):
                     continue
                     
                 ratio_data.append({
@@ -502,18 +504,30 @@ class Visualizer:
                     'green': green_value,
                     'ratio': ratio,
                     'n_pixels': first_cell_data.n_pixels,  # 细胞面积（像素数）
-                    't50': t50
+                    't50': t50,
+                    't90': t90
                 })
             
         if len(ratio_data) == 0:
             print("No valid data for ratio analysis.")
             return
+        
+        # 导出原始数据为CSV（用于本地分析）
+        import pandas as pd
+        raw_df = pd.DataFrame(ratio_data)
+        # 添加倒数列，方便分析
+        raw_df['1/red'] = 1.0 / raw_df['red']
+        raw_df['1/green'] = 1.0 / raw_df['green']
+        raw_csv_path = Path(self.output_dir) / 'ratio_t50_raw_data.csv'
+        raw_df.to_csv(raw_csv_path, index=False)
+        print(f"  Raw data exported to: {raw_csv_path}")
             
         # 转换为 numpy 数组
         red_values = np.array([d['red'] for d in ratio_data])
         green_values = np.array([d['green'] for d in ratio_data])
         ratio_values = np.array([d['ratio'] for d in ratio_data])
         t50_values = np.array([d['t50'] for d in ratio_data])
+        t90_values = np.array([d['t90'] for d in ratio_data])
         area_values = np.array([d['n_pixels'] for d in ratio_data])
         
         print(f"  Total cells with valid data: {len(ratio_data)}")
@@ -580,6 +594,14 @@ class Visualizer:
         green_filtered = green_values[valid_mask]
         ratio_filtered = ratio_values[valid_mask]
         t50_filtered = t50_values[valid_mask]
+        t90_filtered = t90_values[valid_mask]
+        
+        # 保留过滤后的数据对应的原始信息（用于Cook's Distance打印）
+        filtered_indices = np.where(valid_mask)[0]
+        file_stems = np.array([d['file_stem'] for d in ratio_data])
+        cell_ids = np.array([d['cell_id'] for d in ratio_data])
+        file_stems_filtered = file_stems[valid_mask]
+        cell_ids_filtered = cell_ids[valid_mask]
         
         # 对红绿强度取倒数用于拟合分析
         red_inv_filtered = 1.0 / red_filtered
@@ -588,59 +610,97 @@ class Visualizer:
         if len(t50_filtered) < 3:
             print("Not enough valid data points for analysis.")
             return
+        
+        # === Cook's Distance 过滤辅助函数 ===
+        def filter_by_cooks_distance(x, y, x_name, file_stems_arr, cell_ids_arr):
+            """
+            使用Cook's Distance过滤异常点（阈值=4/n）
+            返回过滤后的x, y和对应的file/cell信息
+            """
+            n = len(x)
+            if n < 3:
+                return x, y, file_stems_arr, cell_ids_arr
+            
+            # 使用OLS计算Cook's Distance
+            X = sm.add_constant(x)
+            model = sm.OLS(y, X).fit()
+            influence = model.get_influence()
+            cooks_d = influence.cooks_distance[0]
+            
+            # 阈值: 4/n
+            threshold = 4.0 / n
+            outlier_mask = cooks_d > threshold
+            n_outliers = np.sum(outlier_mask)
+            
+            if n_outliers > 0:
+                print(f"\n  Cook's Distance filter for {x_name}: removed {n_outliers} points (threshold=4/{n}={threshold:.4f})")
+                # 打印被移除点的文件和坐标信息
+                outlier_indices = np.where(outlier_mask)[0]
+                for idx in outlier_indices:
+                    print(f"    - File: {file_stems_arr[idx]}, Cell ID: {cell_ids_arr[idx]}, Cook's D: {cooks_d[idx]:.4f}")
+            
+            # 返回过滤后的数据
+            valid_mask_cook = ~outlier_mask
+            return x[valid_mask_cook], y[valid_mask_cook], file_stems_arr[valid_mask_cook], cell_ids_arr[valid_mask_cook]
             
         # 创建图表: 2x2 布局
         fig, axes = plt.subplots(2, 2, figsize=(14, 12))
             
-        # 1. 1/红色值 vs T50
+        # 1. 1/红色值 vs T50 (带Cook's Distance过滤)
+        red_inv_clean, t50_red_clean, _, _ = filter_by_cooks_distance(
+            red_inv_filtered, t50_filtered, '1/Red vs T50', file_stems_filtered, cell_ids_filtered)
         ax1 = axes[0, 0]
-        ax1.scatter(red_inv_filtered, t50_filtered, alpha=0.6, s=40, c='red', edgecolors='darkred')
-        slope1, intercept1, r1, p1, se1 = stats.linregress(red_inv_filtered, t50_filtered)
-        x_line = np.linspace(red_inv_filtered.min(), red_inv_filtered.max(), 100)
+        ax1.scatter(red_inv_clean, t50_red_clean, alpha=0.6, s=40, c='red', edgecolors='darkred')
+        slope1, intercept1, r1, p1, se1 = stats.linregress(red_inv_clean, t50_red_clean)
+        x_line = np.linspace(red_inv_clean.min(), red_inv_clean.max(), 100)
         ax1.plot(x_line, slope1 * x_line + intercept1, 'k--', linewidth=2, 
                 label=f'R={r1:.3f}, p={p1:.2e}')
         ax1.set_xlabel('1/Red Intensity', fontsize=11)
         ax1.set_ylabel('T50 (Correlation)', fontsize=11)
-        ax1.set_title('1/Red Intensity vs T50', fontsize=12)
+        ax1.set_title(f'1/Red Intensity vs T50 (n={len(red_inv_clean)})', fontsize=12)
         ax1.legend(loc='best')
         ax1.grid(True, alpha=0.3)
             
-        # 2. 1/绿色值 vs T50
+        # 2. 1/绿色值 vs T50 (带Cook's Distance过滤)
+        green_inv_clean, t50_green_clean, _, _ = filter_by_cooks_distance(
+            green_inv_filtered, t50_filtered, '1/Green vs T50', file_stems_filtered, cell_ids_filtered)
         ax2 = axes[0, 1]
-        ax2.scatter(green_inv_filtered, t50_filtered, alpha=0.6, s=40, c='green', edgecolors='darkgreen')
-        slope2, intercept2, r2, p2, se2 = stats.linregress(green_inv_filtered, t50_filtered)
-        x_line = np.linspace(green_inv_filtered.min(), green_inv_filtered.max(), 100)
+        ax2.scatter(green_inv_clean, t50_green_clean, alpha=0.6, s=40, c='green', edgecolors='darkgreen')
+        slope2, intercept2, r2, p2, se2 = stats.linregress(green_inv_clean, t50_green_clean)
+        x_line = np.linspace(green_inv_clean.min(), green_inv_clean.max(), 100)
         ax2.plot(x_line, slope2 * x_line + intercept2, 'k--', linewidth=2,
                 label=f'R={r2:.3f}, p={p2:.2e}')
         ax2.set_xlabel('1/Green Intensity', fontsize=11)
         ax2.set_ylabel('T50 (Correlation)', fontsize=11)
-        ax2.set_title('1/Green Intensity vs T50', fontsize=12)
+        ax2.set_title(f'1/Green Intensity vs T50 (n={len(green_inv_clean)})', fontsize=12)
         ax2.legend(loc='best')
         ax2.grid(True, alpha=0.3)
             
-        # 3. 红绿比值 vs T50
+        # 3. 红绿比值 vs T50 (带Cook's Distance过滤)
+        ratio_clean, t50_ratio_clean, _, _ = filter_by_cooks_distance(
+            ratio_filtered, t50_filtered, 'Ratio vs T50', file_stems_filtered, cell_ids_filtered)
         ax3 = axes[1, 0]
-        ax3.scatter(ratio_filtered, t50_filtered, alpha=0.6, s=40, c='purple', edgecolors='darkviolet')
-        slope3, intercept3, r3, p3, se3 = stats.linregress(ratio_filtered, t50_filtered)
-        x_line = np.linspace(ratio_filtered.min(), ratio_filtered.max(), 100)
+        ax3.scatter(ratio_clean, t50_ratio_clean, alpha=0.6, s=40, c='purple', edgecolors='darkviolet')
+        slope3, intercept3, r3, p3, se3 = stats.linregress(ratio_clean, t50_ratio_clean)
+        x_line = np.linspace(ratio_clean.min(), ratio_clean.max(), 100)
         ax3.plot(x_line, slope3 * x_line + intercept3, 'k--', linewidth=2,
                 label=f'R={r3:.3f}, p={p3:.2e}')
         ax3.set_xlabel('Red/Green Ratio', fontsize=11)
         ax3.set_ylabel('T50 (Correlation)', fontsize=11)
-        ax3.set_title('Red/Green Ratio vs T50', fontsize=12)
+        ax3.set_title(f'Red/Green Ratio vs T50 (n={len(ratio_clean)})', fontsize=12)
         ax3.legend(loc='best')
         ax3.grid(True, alpha=0.3)
             
-        # 4. 比值分布直方图
+        # 4. 比值分布直方图 (使用过滤后的数据)
         ax4 = axes[1, 1]
-        ax4.hist(ratio_filtered, bins=30, color='purple', alpha=0.7, edgecolor='black')
-        ax4.axvline(x=np.median(ratio_filtered), color='red', linestyle='--', 
-                   linewidth=2, label=f'Median: {np.median(ratio_filtered):.3f}')
-        ax4.axvline(x=np.mean(ratio_filtered), color='blue', linestyle='--',
-                   linewidth=2, label=f'Mean: {np.mean(ratio_filtered):.3f}')
+        ax4.hist(ratio_clean, bins=30, color='purple', alpha=0.7, edgecolor='black')
+        ax4.axvline(x=np.median(ratio_clean), color='red', linestyle='--', 
+                   linewidth=2, label=f'Median: {np.median(ratio_clean):.3f}')
+        ax4.axvline(x=np.mean(ratio_clean), color='blue', linestyle='--',
+                   linewidth=2, label=f'Mean: {np.mean(ratio_clean):.3f}')
         ax4.set_xlabel('Red/Green Ratio', fontsize=11)
         ax4.set_ylabel('Count', fontsize=11)
-        ax4.set_title(f'Red/Green Ratio Distribution (n={len(ratio_filtered)})', fontsize=12)
+        ax4.set_title(f'Red/Green Ratio Distribution (n={len(ratio_clean)})', fontsize=12)
         ax4.legend(loc='best')
         ax4.grid(True, alpha=0.3)
             
@@ -653,10 +713,172 @@ class Visualizer:
         print(f"  Saved: {fig_path}")
             
         # 输出统计结果
-        print(f"\n  Analysis Results (Inverse Intensity):")
-        print(f"    1/Red vs T50:   R={r1:.3f}, p={p1:.2e}")
-        print(f"    1/Green vs T50: R={r2:.3f}, p={p2:.2e}")
-        print(f"    Ratio vs T50:   R={r3:.3f}, p={p3:.2e}")
+        print(f"\n  Analysis Results (Inverse Intensity, after Cook's Distance filter):")
+        print(f"    1/Red vs T50:   R={r1:.3f}, p={p1:.2e}, n={len(red_inv_clean)}")
+        print(f"    1/Green vs T50: R={r2:.3f}, p={p2:.2e}, n={len(green_inv_clean)}")
+        print(f"    Ratio vs T50:   R={r3:.3f}, p={p3:.2e}, n={len(ratio_clean)}")
+        
+        # === 多元回归分析（自变量: 1/红色、 1/绿色） ===
+        self._perform_multiple_regression_analysis(
+            red_inv_filtered, green_inv_filtered, t50_filtered, t90_filtered,
+            file_stems_filtered, cell_ids_filtered, 'T50')
+        self._perform_multiple_regression_analysis(
+            red_inv_filtered, green_inv_filtered, t90_filtered, t50_filtered,
+            file_stems_filtered, cell_ids_filtered, 'T90')
+    
+    def _perform_multiple_regression_analysis(self, red_inv, green_inv, y_main, y_other,
+                                               file_stems, cell_ids, y_name):
+        """
+        执行多元回归分析，包括偏回归和残差分析
+        
+        Parameters:
+        - red_inv: 1/红色强度数组
+        - green_inv: 1/绿色强度数组
+        - y_main: 主因变量 (T50或T90)
+        - y_other: 另一个因变量 (用于参考)
+        - file_stems: 文件名数组
+        - cell_ids: 细胞ID数组
+        - y_name: 因变量名称 ('T50'或'T90')
+        """
+        print(f"\n  === Multiple Regression Analysis (Y = {y_name}) ===")
+        
+        n = len(y_main)
+        if n < 5:
+            print(f"    Not enough data points for multiple regression (n={n})")
+            return
+        
+        # 构建自变量矩阵 (1/红色, 1/绿色)
+        X = np.column_stack([red_inv, green_inv])
+        X_with_const = sm.add_constant(X)
+        y = y_main
+        
+        # 拟合OLS模型
+        model = sm.OLS(y, X_with_const).fit()
+        
+        # 计算Cook's Distance
+        influence = model.get_influence()
+        cooks_d = influence.cooks_distance[0]
+        threshold = 4.0 / n
+        outlier_mask = cooks_d > threshold
+        n_outliers = np.sum(outlier_mask)
+        
+        if n_outliers > 0:
+            print(f"    Cook's Distance filter: removed {n_outliers} points (threshold=4/{n}={threshold:.4f})")
+            outlier_indices = np.where(outlier_mask)[0]
+            for idx in outlier_indices:
+                print(f"      - File: {file_stems[idx]}, Cell ID: {cell_ids[idx]}, Cook's D: {cooks_d[idx]:.4f}")
+        
+        # 过滤后重新拟合
+        valid_mask = ~outlier_mask
+        X_clean = X[valid_mask]
+        y_clean = y[valid_mask]
+        red_inv_clean = red_inv[valid_mask]
+        green_inv_clean = green_inv[valid_mask]
+        file_stems_clean = file_stems[valid_mask]
+        cell_ids_clean = cell_ids[valid_mask]
+        
+        if len(y_clean) < 5:
+            print(f"    Not enough data points after filtering (n={len(y_clean)})")
+            return
+        
+        X_clean_const = sm.add_constant(X_clean)
+        model_clean = sm.OLS(y_clean, X_clean_const).fit()
+        
+        # 输出回归结果
+        print(f"\n    Multiple Regression Results (n={len(y_clean)}):")
+        print(f"      R² = {model_clean.rsquared:.4f}")
+        print(f"      Adjusted R² = {model_clean.rsquared_adj:.4f}")
+        print(f"      F-statistic = {model_clean.fvalue:.4f}, p = {model_clean.f_pvalue:.2e}")
+        print(f"\n      Coefficients:")
+        print(f"        Intercept:  {model_clean.params[0]:.4f} (p={model_clean.pvalues[0]:.2e})")
+        print(f"        1/Red:      {model_clean.params[1]:.4f} (p={model_clean.pvalues[1]:.2e})")
+        print(f"        1/Green:    {model_clean.params[2]:.4f} (p={model_clean.pvalues[2]:.2e})")
+        
+        # 创建图表: 2x2 布局
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        
+        # 获取残差和预测值
+        residuals = model_clean.resid
+        fitted_values = model_clean.fittedvalues
+        
+        # 1. 偏回归图 - 1/红色
+        ax1 = axes[0, 0]
+        # 控制绿色后，红色对Y的偏效应
+        # 残差(Y ~ 绿色) vs 残差(红色 ~ 绿色)
+        model_y_green = sm.OLS(y_clean, sm.add_constant(green_inv_clean)).fit()
+        model_red_green = sm.OLS(red_inv_clean, sm.add_constant(green_inv_clean)).fit()
+        resid_y = model_y_green.resid
+        resid_red = model_red_green.resid
+        ax1.scatter(resid_red, resid_y, alpha=0.6, s=40, c='red', edgecolors='darkred')
+        # 拟合偏回归线
+        slope_partial, intercept_partial, r_partial, p_partial, _ = stats.linregress(resid_red, resid_y)
+        x_line = np.linspace(resid_red.min(), resid_red.max(), 100)
+        ax1.plot(x_line, slope_partial * x_line + intercept_partial, 'k--', linewidth=2,
+                label=f'Partial R={r_partial:.3f}, p={p_partial:.2e}')
+        ax1.axhline(y=0, color='gray', linestyle='-', alpha=0.5)
+        ax1.axvline(x=0, color='gray', linestyle='-', alpha=0.5)
+        ax1.set_xlabel('1/Red (controlling for 1/Green)', fontsize=11)
+        ax1.set_ylabel(f'{y_name} (controlling for 1/Green)', fontsize=11)
+        ax1.set_title(f'Partial Regression: 1/Red | 1/Green', fontsize=12)
+        ax1.legend(loc='best')
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. 偏回归图 - 1/绿色
+        ax2 = axes[0, 1]
+        # 控制红色后，绿色对Y的偏效应
+        model_y_red = sm.OLS(y_clean, sm.add_constant(red_inv_clean)).fit()
+        model_green_red = sm.OLS(green_inv_clean, sm.add_constant(red_inv_clean)).fit()
+        resid_y2 = model_y_red.resid
+        resid_green = model_green_red.resid
+        ax2.scatter(resid_green, resid_y2, alpha=0.6, s=40, c='green', edgecolors='darkgreen')
+        slope_partial2, intercept_partial2, r_partial2, p_partial2, _ = stats.linregress(resid_green, resid_y2)
+        x_line = np.linspace(resid_green.min(), resid_green.max(), 100)
+        ax2.plot(x_line, slope_partial2 * x_line + intercept_partial2, 'k--', linewidth=2,
+                label=f'Partial R={r_partial2:.3f}, p={p_partial2:.2e}')
+        ax2.axhline(y=0, color='gray', linestyle='-', alpha=0.5)
+        ax2.axvline(x=0, color='gray', linestyle='-', alpha=0.5)
+        ax2.set_xlabel('1/Green (controlling for 1/Red)', fontsize=11)
+        ax2.set_ylabel(f'{y_name} (controlling for 1/Red)', fontsize=11)
+        ax2.set_title(f'Partial Regression: 1/Green | 1/Red', fontsize=12)
+        ax2.legend(loc='best')
+        ax2.grid(True, alpha=0.3)
+        
+        # 3. 残差 vs 拟合值图
+        ax3 = axes[1, 0]
+        ax3.scatter(fitted_values, residuals, alpha=0.6, s=40, c='blue', edgecolors='darkblue')
+        ax3.axhline(y=0, color='red', linestyle='--', linewidth=2)
+        # 添加LOWESS平滑线
+        try:
+            from statsmodels.nonparametric.smoothers_lowess import lowess
+            smoothed = lowess(residuals, fitted_values, frac=0.5)
+            ax3.plot(smoothed[:, 0], smoothed[:, 1], 'orange', linewidth=2, label='LOWESS')
+        except:
+            pass
+        ax3.set_xlabel(f'Fitted {y_name}', fontsize=11)
+        ax3.set_ylabel('Residuals', fontsize=11)
+        ax3.set_title('Residuals vs Fitted Values', fontsize=12)
+        ax3.legend(loc='best')
+        ax3.grid(True, alpha=0.3)
+        
+        # 4. Q-Q图 (残差正态性检验)
+        ax4 = axes[1, 1]
+        from scipy import stats as scipy_stats
+        scipy_stats.probplot(residuals, dist="norm", plot=ax4)
+        ax4.set_title('Normal Q-Q Plot of Residuals', fontsize=12)
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # 保存图片
+        fig_path = Path(self.output_dir) / f'multiple_regression_{y_name}.png'
+        fig.savefig(fig_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"\n    Saved: {fig_path}")
+        
+        # 输出偏回归结果
+        print(f"\n    Partial Regression Results:")
+        print(f"      1/Red | 1/Green:   Partial R = {r_partial:.3f}, p = {p_partial:.2e}")
+        print(f"      1/Green | 1/Red:   Partial R = {r_partial2:.3f}, p = {p_partial2:.2e}")
         
     def _fit_gmm_2components(self, pixels: np.ndarray) -> Dict:
         """
