@@ -46,6 +46,7 @@ from io_utils import MaskFileMatcher
 from plotting import Visualizer
 from cellpose_utils import run_cellpose_on_files, extract_first_frame_from_nd2, find_existing_masks
 from motioncor import process_image_sequence
+from statistics_analysis import StatisticsAnalyzer
 import nd2
 import tifffile
 
@@ -682,13 +683,21 @@ def main():
         include_scatter=args.include_scatter
     )
     
-    # 红绿比值与T50关系分析
+    # 红绿比值与T50关系分析（先生成原始数据CSV，再执行统计分析）
     visualizer.generate_ratio_vs_t50_analysis(
         analyses=analyzer.all_files,
         reaction_df=reaction_df,
         fit_model=args.fit_model,
         background=args.background
     )
+    
+    # 使用独立的统计分析模块执行分析（读取刚生成的CSV）
+    stats_analyzer = StatisticsAnalyzer(output_dir)
+    try:
+        stats_df = stats_analyzer.load_data()
+        stats_analyzer.run_analysis(stats_df)
+    except FileNotFoundError:
+        print("Warning: ratio_t50_raw_data.csv not found, skipping statistics analysis")
     
     print("\n" + "=" * 60)
     print("Pipeline completed!")
