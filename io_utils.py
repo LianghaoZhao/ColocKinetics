@@ -155,15 +155,145 @@ class MaskFileMatcher:
         return matches
 
 
+# 通道元数据读取与映射工具函数
+
+def get_nd2_channel_info(file_path: str) -> List[Dict]:
+    """读取 ND2 文件的通道元数据信息，返回标准化的通道列表。"""
+    info_list: List[Dict] = []
+    try:
+        with nd2.ND2File(str(file_path)) as f:
+            if hasattr(f, "metadata") and f.metadata is not None:
+                md = f.metadata
+                if hasattr(md, "channels") and md.channels is not None:
+                    for idx, ch in enumerate(md.channels):
+                        name = None
+                        ex_wl = None
+                        em_wl = None
+                        try:
+                            ch_obj = getattr(ch, "channel", ch)
+                            if hasattr(ch_obj, "name") and ch_obj.name is not None:
+                                name = str(ch_obj.name)
+                            # 尝试获取激发/发射波长（不同 nd2 版本字段可能不同）
+                            if hasattr(ch_obj, "excitation"):
+                                ex_wl = float(ch_obj.excitation)
+                            elif hasattr(ch_obj, "excitationLambda"):
+                                ex_wl = float(ch_obj.excitationLambda)
+                            if hasattr(ch_obj, "emission"):
+                                em_wl = float(ch_obj.emission)
+                            elif hasattr(ch_obj, "emissionLambda"):
+                                em_wl = float(ch_obj.emissionLambda)
+                        except Exception:
+                            pass
+                        info_list.append({
+                            "index": idx,
+                            "name": name,
+                            "ex_wavelength": ex_wl,
+                            "em_wavelength": em_wl,
+                        })
+    except Exception as e:
+        print(f"Warning: failed to read ND2 channel metadata from {file_path}: {e}")
+    return info_list
+
+
+def find_closest_channel_index(channel_infos: List[Dict], target_wavelength: float) -> Optional[int]:
+    """根据目标波长在通道列表中找到最匹配的通道 index。"""
+    if not channel_infos:
+        return None
+
+    # 优先按名称中的数字匹配（例如 "561"、"488"）
+    target_str = str(int(round(target_wavelength)))
+    name_matches = []
+    for info in channel_infos:
+        name = str(info.get("name") or "")
+        if target_str in name:
+            name_matches.append(info.get("index"))
+    if len(name_matches) == 1:
+        return name_matches[0]
+
+    # 退回到数值波长匹配（激发/发射波长）
+    best_idx: Optional[int] = None
+    best_delta: Optional[float] = None
+    for info in channel_infos:
+        for key in ("ex_wavelength", "em_wavelength"):
+            wl = info.get(key)
+            if wl is None:
+                continue
+            delta = abs(wl - target_wavelength)
+            if best_delta is None or delta < best_delta:
+                best_delta = delta
+                best_idx = info.get("index")
+    return best_idx
+
+
+def auto_map_channels_from_metadata(channel_infos: List[Dict]) -> Optional[Tuple[int, int]]:
+    """在未显式指定 --channels 时，尝试从 ND2 元数据自动映射 561/488 通道。"""
+    if not channel_infos:
+        return None
+    default_targets = (561.0, 488.0)
+    indices: List[int] = []
+    for wl in default_targets:
+        idx = find_closest_channel_index(channel_infos, wl)
+        if idx is None:
+            return None
+        indices.append(idx)
+    return indices[0], indices[1]
+
+
+def resolve_analysis_channel_indices(image_file: str, analysis_wavelengths: Optional[Tuple[float, float]], channels_count: int) -> Tuple[int, int]:
+    """决定用于分析的两个通道索引（channel1/channel2）。"""
+    # 默认使用前两个通道
+    ch1_idx, ch2_idx = 0, 1 if channels_count > 1 else 0
+
+    file_ext = Path(image_file).suffix.lower()
+    channel_infos: List[Dict] = []
+    if file_ext == ".nd2":
+        channel_infos = get_nd2_channel_info(image_file)
+
+    # 显式指定波长：--channels 561,488
+    if analysis_wavelengths is not None:
+        if channel_infos:
+            target1, target2 = analysis_wavelengths
+            idx1 = find_closest_channel_index(channel_infos, target1)
+            idx2 = find_closest_channel_index(channel_infos, target2)
+            if idx1 is None or idx2 is None:
+                print(f"Warning: failed to map --channels {analysis_wavelengths} for file {image_file}, falling back to indices 0 and 1.")
+            else:
+                ch1_idx, ch2_idx = idx1, idx2
+        else:
+            # 有波长配置但没有 ND2 元数据，退回到索引 0/1
+            print(f"Warning: --channels specified but file {image_file} has no ND2 channel metadata; using indices 0 and 1.")
+    else:
+        # 未显式指定时，尝试自动从 ND2 元数据推断（默认 561/488）
+        if channel_infos:
+            auto = auto_map_channels_from_metadata(channel_infos)
+            if auto is not None:
+                ch1_idx, ch2_idx = auto
+
+    # 校验索引有效性
+    if channels_count <= 1:
+        return 0, 0
+    max_idx = max(ch1_idx, ch2_idx)
+    if max_idx >= channels_count:
+        print(f"Warning: mapped channel indices ({ch1_idx}, {ch2_idx}) exceed available channels ({channels_count}) for file {image_file}; using 0 and 1 instead.")
+        ch1_idx, ch2_idx = (0, 1) if channels_count > 1 else (0, 0)
+
+    return ch1_idx, ch2_idx
+
+
 def process_single_file_io(args):
     """
     处理单个文件的IO部分 (加载图像、蒙版，提取细胞数据，创建TimeSeriesAnalysis对象)
     Parameters:
-    - args: (image_file, mask_path, skip_initial_frames, nd2_search_dirs)
+    - args: (image_file, mask_path, skip_initial_frames, nd2_search_dirs[, analysis_channels])
     Returns:
     - TimeSeriesAnalysis object or None
     """
-    image_file, mask_path, skip_initial_frames, nd2_search_dirs = args
+    # 支持向后兼容的参数解包
+    if len(args) == 4:
+        image_file, mask_path, skip_initial_frames, nd2_search_dirs = args
+        analysis_channels = None
+    else:
+        image_file, mask_path, skip_initial_frames, nd2_search_dirs, analysis_channels = args
     if mask_path is None:
         return None
     
@@ -229,6 +359,9 @@ def process_single_file_io(args):
     if (height, width) != mask.shape:
         raise ValueError(f"Image shape {(height, width)} doesn't match mask shape {mask.shape}")
 
+    # 决定用于分析的两个通道索引
+    ch1_idx, ch2_idx = resolve_analysis_channel_indices(image_file, analysis_channels, channels)
+
     # 创建分析对象
     analysis = FileData(
         file_path=image_file,
@@ -263,7 +396,7 @@ def process_single_file_io(args):
             current_img = current_img[np.newaxis, :, :]  # 添加通道维度
 
         # 验证通道数
-        if current_img.shape[0] < 2:
+        if current_img.shape[0] < 2 or current_img.shape[0] <= max(ch1_idx, ch2_idx):
             continue
 
         # 处理每个细胞
@@ -275,8 +408,8 @@ def process_single_file_io(args):
                 continue
 
             # 提取通道数据
-            channel1 = current_img[0][cell_mask]  # 第一个通道
-            channel2 = current_img[1][cell_mask]  # 第二个通道
+            channel1 = current_img[ch1_idx][cell_mask]  # 第一个通道
+            channel2 = current_img[ch2_idx][cell_mask]  # 第二个通道
 
             # 检查是否有NaN值
             if np.any(np.isnan(channel1)) or np.any(np.isnan(channel2)):

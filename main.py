@@ -194,7 +194,7 @@ def run_motion_correction(image_files, output_dir, max_iterations=10, threshold=
     return corrected_files
 
 
-def run_cellpose_segmentation(image_files, output_dir, diameter=380, gpu_device=0, use_gpu=True):
+def run_cellpose_segmentation(image_files, output_dir, diameter=380, gpu_device=0, use_gpu=True, niter=None, cp_channel_wavelength=None, gamma=0.5):
     """
     运行 Cellpose 分割
     
@@ -214,17 +214,21 @@ def run_cellpose_segmentation(image_files, output_dir, diameter=380, gpu_device=
         
         # 提取第一帧用于 Cellpose（保存到同一目录）
         print("Extracting first frames for Cellpose...")
-        extracted_frames = extract_first_frame_from_nd2(files_need_mask, str(mask_dir))
+        extracted_frames = extract_first_frame_from_nd2(files_need_mask, str(mask_dir), cp_channel_wavelength=cp_channel_wavelength, gamma=gamma)
         
         if extracted_frames:
             # 运行 Cellpose（输出到同一目录）
-            print(f"\nRunning Cellpose (diameter={diameter}, gpu_device={gpu_device})...")
+            niter_info = f", niter={niter}" if niter is not None else ""
+            gamma_info = f", gamma={gamma}" if gamma != 1.0 else ""
+            print(f"\nRunning Cellpose (diameter={diameter}, gpu_device={gpu_device}{niter_info}{gamma_info})...")
             run_cellpose_on_files(
                 extracted_frames,
                 str(mask_dir),
                 diameter=diameter,
                 gpu_device=gpu_device,
-                use_gpu=use_gpu
+                use_gpu=use_gpu,
+                niter=niter,
+                cp_channel_wavelength=None  # extract_first_frame 已经处理了通道选择
             )
         
         # 重新查找 mask
@@ -271,6 +275,12 @@ def main():
                        help='Cellpose: GPU device ID (default: 0)')
     parser.add_argument('--cp-no-gpu', action='store_true',
                        help='Cellpose: disable GPU')
+    parser.add_argument('--cp-niter', type=int, default=None,
+                       help='Cellpose: dynamics iterations for mask refinement (default: Cellpose default ~200)')
+    parser.add_argument('--cp-channels', type=str, default=None,
+                       help='Cellpose: segmentation channel(s) by wavelength, e.g. "488" or "561" (single channel for segmentation)')
+    parser.add_argument('--cp-gamma', type=float, default=0.5,
+                       help='Cellpose: gamma correction for image preprocessing (default: 0.5, set to 1.0 to disable)')
     
     # 分析参数
     parser.add_argument('--skip-initial-frames', type=int, default=0,
@@ -278,6 +288,8 @@ def main():
     parser.add_argument('--fit-model', type=str, default='first_order',
                        choices=['first_order', 'delayed_first_order'],
                        help='Fitting model (default: first_order)')
+    parser.add_argument('--channels', type=str, default=None,
+                       help='Analysis channels specified by wavelengths, e.g. "561,488" (channel1,channel2)')
     
     # 输出控制
     parser.add_argument('--save-results', action='store_true',
@@ -290,6 +302,29 @@ def main():
                        help='Background signal to subtract for ratio calculation (default: 100)')
 
     args = parser.parse_args()
+
+    # 解析分析通道参数 --channels 561,488 → (561.0, 488.0)
+    analysis_channels = None
+    if args.channels:
+        try:
+            parts = [p.strip() for p in args.channels.split(',') if p.strip()]
+            if len(parts) != 2:
+                print(f"Warning: --channels expects two comma-separated wavelengths, got: {args.channels}")
+            else:
+                w1, w2 = float(parts[0]), float(parts[1])
+                analysis_channels = (w1, w2)
+        except ValueError:
+            print(f"Warning: failed to parse --channels '{args.channels}', expected format like '561,488'")
+            analysis_channels = None
+
+    # 解析 Cellpose 通道参数 --cp-channels 488 → 488.0 (单个波长)
+    cp_channel_wavelength = None
+    if args.cp_channels:
+        try:
+            cp_channel_wavelength = float(args.cp_channels.strip())
+        except ValueError:
+            print(f"Warning: failed to parse --cp-channels '{args.cp_channels}', expected a single wavelength like '488'")
+            cp_channel_wavelength = None
 
     # Step 0: 查找图像文件
     print("=" * 60)
@@ -350,7 +385,10 @@ def main():
             output_dir,
             diameter=args.cp_diameter,
             gpu_device=args.cp_gpu_device,
-            use_gpu=not args.cp_no_gpu
+            use_gpu=not args.cp_no_gpu,
+            niter=args.cp_niter,
+            cp_channel_wavelength=cp_channel_wavelength,
+            gamma=args.cp_gamma
         )
         
         # 检查是否所有文件都有 mask
@@ -397,7 +435,7 @@ def main():
 
     # 加载数据并匹配 mask
     print("\nLoading image and mask data...")
-    analyses = analyzer.process_files_with_masks(analysis_files, mask_pattern, args.skip_initial_frames, nd2_search_dirs)
+    analyses = analyzer.process_files_with_masks(analysis_files, mask_pattern, args.skip_initial_frames, nd2_search_dirs, channels=analysis_channels)
 
     if not analyses:
         print("No files were successfully processed (no matching masks found)")

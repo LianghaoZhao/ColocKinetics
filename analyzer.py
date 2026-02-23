@@ -16,7 +16,7 @@ class MainAnalyzer:
     def __init__(self):
         self.all_files: List[FileData] = []
 
-    def process_files_with_masks(self, image_files: List[str], mask_pattern: Optional[str] = None, skip_initial_frames: int = 0, nd2_search_dirs: Optional[List[str]] = None) -> List[FileData]:
+    def process_files_with_masks(self, image_files: List[str], mask_pattern: Optional[str] = None, skip_initial_frames: int = 0, nd2_search_dirs: Optional[List[str]] = None, channels: Optional[tuple] = None) -> List[FileData]:
         """处理多个图像文件，自动匹配蒙版（顺序处理）
         
         Parameters:
@@ -24,6 +24,7 @@ class MainAnalyzer:
         - mask_pattern: mask文件匹配模式
         - skip_initial_frames: 跳过的初始帧数
         - nd2_search_dirs: 搜索原始ND2文件的目录列表
+        - channels: 分析用波长配置 (w1, w2)，例如 (561.0, 488.0)
         """
         # 如果未提供nd2_search_dirs,使用默认搜索路径
         if nd2_search_dirs is None:
@@ -42,7 +43,7 @@ class MainAnalyzer:
 
         for image_file in image_files:
             mask_path = matches[image_file]
-            io_result = process_single_file_io((image_file, mask_path, skip_initial_frames, nd2_search_dirs))
+            io_result = process_single_file_io((image_file, mask_path, skip_initial_frames, nd2_search_dirs, channels))
             if io_result is not None:
                 self.all_files.append(io_result)
         return self.all_files

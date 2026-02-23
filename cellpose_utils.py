@@ -14,7 +14,9 @@ def run_cellpose_on_files(
     gpu_device: int = 0,
     use_gpu: bool = True,
     save_png: bool = True,
-    verbose: bool = True
+    verbose: bool = True,
+    niter: Optional[int] = None,
+    cp_channel_wavelength: Optional[float] = None
 ) -> List[str]:
     """
     对图像文件列表运行 Cellpose 生成 mask (使用 CLI 命令行)
@@ -27,6 +29,8 @@ def run_cellpose_on_files(
     - use_gpu: 是否使用 GPU
     - save_png: 是否保存 PNG 可视化
     - verbose: 是否显示详细输出
+    - niter: Cellpose dynamics 迭代次数（None 则使用 Cellpose 默认值）
+    - cp_channel_wavelength: Cellpose 分割用通道波长（None 则使用全部通道）
     
     Returns:
     - 生成的 mask 文件路径列表
@@ -54,6 +58,9 @@ def run_cellpose_on_files(
         
         if save_png:
             cmd.append("--save_png")
+        
+        if niter is not None:
+            cmd.extend(["--niter", str(niter)])
         
         if verbose:
             cmd.append("--verbose")
@@ -165,18 +172,22 @@ def find_existing_masks(image_files: List[str], mask_dir: str) -> dict:
     return matches
 
 
-def extract_first_frame_from_nd2(image_files: List[str], output_dir: str) -> List[str]:
+def extract_first_frame_from_nd2(image_files: List[str], output_dir: str, channel: Optional[int] = None, cp_channel_wavelength: Optional[float] = None, gamma: float = 0.5) -> List[str]:
     """
     从 ND2/TIF 文件中提取第一帧用于 Cellpose 分割
     
     Parameters:
     - image_files: 图像文件路径列表 (ND2 或 TIF)
     - output_dir: 输出目录
+    - channel: 要提取的通道索引(0-based),如果为None则使用所有通道 (deprecated, 优先使用 cp_channel_wavelength)
+    - cp_channel_wavelength: Cellpose 分割用通道波长（None 则使用所有通道）
+    - gamma: Gamma 校正值（默认 0.5，1.0 表示不校正）
     
     Returns:
     - 提取的 TIFF 文件路径列表
     """
     import tifffile
+    from io_utils import get_nd2_channel_info, find_closest_channel_index
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -212,6 +223,36 @@ def extract_first_frame_from_nd2(image_files: List[str], output_dir: str) -> Lis
                     first_frame = data[0]
             else:
                 first_frame = data
+            
+            # 如果指定了 Cellpose 分割通道波长，按波长选择通道
+            if cp_channel_wavelength is not None and ext == '.nd2':
+                channel_infos = get_nd2_channel_info(image_file)
+                if channel_infos:
+                    ch_idx = find_closest_channel_index(channel_infos, cp_channel_wavelength)
+                    if ch_idx is not None and first_frame.ndim >= 2:
+                        # 如果 first_frame 是多通道 (C, H, W)
+                        if first_frame.ndim == 3 and ch_idx < first_frame.shape[0]:
+                            first_frame = first_frame[ch_idx]  # 提取单通道 (H, W)
+                            print(f"  Cellpose: using channel index {ch_idx} (wavelength ~{cp_channel_wavelength}nm) for {image_path.name}")
+                        else:
+                            print(f"  Warning: failed to extract channel {ch_idx} from {image_path.name}, using all channels")
+                    else:
+                        print(f"  Warning: failed to map wavelength {cp_channel_wavelength}nm for {image_path.name}, using all channels")
+            
+            # 应用 Gamma 校正
+            if gamma != 1.0:
+                import numpy as np
+                # 归一化到 [0, 1]
+                first_frame = first_frame.astype(np.float32)
+                min_val = first_frame.min()
+                max_val = first_frame.max()
+                if max_val > min_val:
+                    first_frame = (first_frame - min_val) / (max_val - min_val)
+                    # 应用 gamma 校正
+                    first_frame = np.power(first_frame, gamma)
+                    # 恢复到原始范围
+                    first_frame = first_frame * (max_val - min_val) + min_val
+                    first_frame = first_frame.astype(data.dtype)
             
             # 保存为 TIFF
             tifffile.imwrite(str(output_path), first_frame)
