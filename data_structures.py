@@ -36,8 +36,17 @@ class FileData:
     cells: Dict[int, List[CellData]] = field(default_factory=dict)
     all_cells: List[CellData] = field(default_factory=list)  # 所有时间点的所有细胞
     skip_initial_frames: int = field(default=0)  # 跳过的初始帧数
+    max_frames: Optional[int] = field(default=None)  # 最大分析帧数（None表示不限制）
     original_nd2_path: Optional[str] = field(default=None)  # 存储原始ND2路径
     position_index: Optional[int] = field(default=None)  # 拆分视野的P索引
+    
+    def is_frame_in_range(self, frame_idx: int) -> bool:
+        """判断帧索引是否在分析范围内"""
+        if frame_idx < self.skip_initial_frames:
+            return False
+        if self.max_frames is not None and frame_idx >= self.max_frames:
+            return False
+        return True
 
     def add_cell_data(self, cell_data: CellData):
         """添加细胞数据"""

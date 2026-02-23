@@ -16,13 +16,14 @@ class MainAnalyzer:
     def __init__(self):
         self.all_files: List[FileData] = []
 
-    def process_files_with_masks(self, image_files: List[str], mask_pattern: Optional[str] = None, skip_initial_frames: int = 0, nd2_search_dirs: Optional[List[str]] = None, channels: Optional[tuple] = None) -> List[FileData]:
+    def process_files_with_masks(self, image_files: List[str], mask_pattern: Optional[str] = None, skip_initial_frames: int = 0, max_frames: Optional[int] = None, nd2_search_dirs: Optional[List[str]] = None, channels: Optional[tuple] = None) -> List[FileData]:
         """处理多个图像文件，自动匹配蒙版（顺序处理）
         
         Parameters:
         - image_files: 图像文件列表
         - mask_pattern: mask文件匹配模式
         - skip_initial_frames: 跳过的初始帧数
+        - max_frames: 最大分析帧数（None表示不限制）
         - nd2_search_dirs: 搜索原始ND2文件的目录列表
         - channels: 分析用波长配置 (w1, w2)，例如 (561.0, 488.0)
         """
@@ -43,7 +44,7 @@ class MainAnalyzer:
 
         for image_file in image_files:
             mask_path = matches[image_file]
-            io_result = process_single_file_io((image_file, mask_path, skip_initial_frames, nd2_search_dirs, channels))
+            io_result = process_single_file_io((image_file, mask_path, skip_initial_frames, max_frames, nd2_search_dirs, channels))
             if io_result is not None:
                 self.all_files.append(io_result)
         return self.all_files
@@ -60,12 +61,12 @@ class MainAnalyzer:
                 # 构建 time_point -> (corr, p_val) 的映射
                 cell_correlations[cell_id] = {t: (c, p) for t, c, p in zip(time_points, correlations, p_values)}
             
-            # 预先计算每个cell_id的有效时间点集合（跳过前N帧后的）
+            # 预先计算每个cell_id的有效时间点集合（在指定范围内的）
             valid_timepoints_per_cell = {}
             for cell_id, cell_list in file.cells.items():
                 sorted_cells = sorted(cell_list, key=lambda c: c.time_point)
                 valid_timepoints_per_cell[cell_id] = {
-                    c.time_point for idx, c in enumerate(sorted_cells) if idx >= file.skip_initial_frames
+                    c.time_point for idx, c in enumerate(sorted_cells) if file.is_frame_in_range(idx)
                 }
             
             for cell in file.all_cells:

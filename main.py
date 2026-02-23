@@ -351,7 +351,9 @@ def main():
     
     # 分析参数
     parser.add_argument('--skip-initial-frames', type=int, default=0,
-                       help='Number of initial frames to skip in analysis')
+                       help='Number of initial frames to skip in analysis (0-indexed)')
+    parser.add_argument('--max-frames', type=int, default=None,
+                       help='Maximum number of frames to analyze (None = no limit). E.g., --max-frames 10 analyzes frames 0-9')
     parser.add_argument('--fit-model', type=str, default='first_order',
                        choices=['first_order', 'delayed_first_order'],
                        help='Fitting model (default: first_order)')
@@ -494,10 +496,15 @@ def main():
     print("=" * 60)
     
     # 显示分析参数
+    frame_range_info = []
     if args.skip_initial_frames > 0:
-        print(f"\nSkip initial frames: {args.skip_initial_frames}")
-        print(f"  -> First {args.skip_initial_frames} time points will be excluded from fitting")
-        print(f"  -> These points will be shown in gray color in plots")
+        frame_range_info.append(f"skip first {args.skip_initial_frames}")
+    if args.max_frames is not None:
+        frame_range_info.append(f"use only first {args.max_frames}")
+    if frame_range_info:
+        print(f"\nFrame range: {', '.join(frame_range_info)}")
+        print(f"  -> Fitting on frames {args.skip_initial_frames} to {args.max_frames - 1 if args.max_frames else 'end'}")
+        print(f"  -> Points outside this range will be shown in gray color")
 
     # 创建分析器
     analyzer = MainAnalyzer()
@@ -520,7 +527,13 @@ def main():
 
     # 加载数据并匹配 mask
     print("\nLoading image and mask data...")
-    analyses = analyzer.process_files_with_masks(analysis_files, mask_pattern, args.skip_initial_frames, nd2_search_dirs, channels=analysis_channels)
+    analyses = analyzer.process_files_with_masks(
+        analysis_files, mask_pattern, 
+        skip_initial_frames=args.skip_initial_frames, 
+        max_frames=args.max_frames,
+        nd2_search_dirs=nd2_search_dirs, 
+        channels=analysis_channels
+    )
 
     if not analyses:
         print("No files were successfully processed (no matching masks found)")

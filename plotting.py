@@ -71,18 +71,47 @@ class Visualizer:
         # 预先计算所有细胞的指标（避免在循环中重复计算）
         all_cell_metrics = CoLocalizationMetrics.calculate_metrics_for_file(analysis)
         
-        # 输出跳过帧数的诊断信息（仅对第一个文件的第一个细胞）
-        if analysis.skip_initial_frames > 0:
-            first_cell_id = all_cell_ids[0] if all_cell_ids else None
-            if first_cell_id is not None:
-                _, _, _, first_is_skipped = CoLocalizationMetrics.get_all_correlations_with_skip_mask(analysis, first_cell_id)
-                n_skipped = np.sum(first_is_skipped)
-                print(f"  [DEBUG] File: {original_filename}, skip_initial_frames={analysis.skip_initial_frames}, actually skipped={n_skipped} points")
+        # 预先收集所有细胞的信号强度用于归一化颜色条
+        all_red_intensities = []
+        all_green_intensities = []
+        for cell_id in all_cell_ids:
+            sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
+            for idx, cell_data in enumerate(sorted_cells):
+                if analysis.is_frame_in_range(idx):
+                    all_red_intensities.append(np.mean(cell_data.intensity1))
+                    all_green_intensities.append(np.mean(cell_data.intensity2))
+                    break
+        
+        # 计算红绿信号强度的全局范围
+        if all_red_intensities:
+            red_min, red_max = np.min(all_red_intensities), np.max(all_red_intensities)
+        else:
+            red_min, red_max = 0, 1
+        if all_green_intensities:
+            green_min, green_max = np.min(all_green_intensities), np.max(all_green_intensities)
+        else:
+            green_min, green_max = 0, 1
                 
-        # 为每个细胞绘制相关系数随时间变化的图
+        # 为每个细胞绑制相关系数随时间变化的图
         for idx, cell_id in enumerate(all_cell_ids):
             # 获取所有点（包括跳过的）用于绑图
             all_time, all_corr, all_pval, is_skipped = CoLocalizationMetrics.get_all_correlations_with_skip_mask(analysis, cell_id)
+            
+            # 获取第一个有效时间点的细胞数据（用于信号强度和细胞大小）
+            sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
+            first_valid_cell = None
+            for frame_idx, cell_data in enumerate(sorted_cells):
+                if analysis.is_frame_in_range(frame_idx):
+                    first_valid_cell = cell_data
+                    break
+            
+            # 获取红绿信号强度和细胞大小
+            if first_valid_cell is not None:
+                red_intensity = np.mean(first_valid_cell.intensity1)
+                green_intensity = np.mean(first_valid_cell.intensity2)
+                cell_size = first_valid_cell.n_pixels
+            else:
+                red_intensity, green_intensity, cell_size = np.nan, np.nan, 0
                     
             # 获取有效点用于拟合
             cell_metrics = all_cell_metrics[cell_id]
@@ -118,9 +147,11 @@ class Visualizer:
             # 选择拟合函数
             fit_func = delayed_first_order_reaction if fit_model == 'delayed_first_order' else first_order_reaction
 
-            # 绘制拟合曲线
+            # 绘制拟合曲线（只在有效数据范围内绘制，避免外推到跳过的区域产生极端值）
             if not np.isnan(fit_results['k']) and fit_results['k'] > 0:
-                t_fit = np.linspace(all_time.min(), all_time.max(), 100)
+                # 使用有效数据点的时间范围，而不是所有点的范围
+                valid_time = all_time[~is_skipped]
+                t_fit = np.linspace(valid_time.min(), valid_time.max(), 100)
                 if fit_model == 'delayed_first_order':
                     y_fit = fit_func(t_fit, fit_results['A0'],
                                     fit_results['k'], fit_results['A_inf'],
@@ -145,8 +176,39 @@ class Visualizer:
             else:
                 ax.set_title(f'Cell {cell_id}\nR²: {fit_results["r_squared"]:.3f}')
             ax.grid(True, alpha=0.3)
-            ax.legend()
+            ax.legend(fontsize=7, loc='upper right')
             ax.axhline(y=0, color='r', linestyle='--', alpha=0.5)
+            
+            # 在小图右下角添加信号强度、细胞大小和颜色条
+            if not np.isnan(red_intensity) and not np.isnan(green_intensity):
+                # 添加文本信息
+                info_text = f'R:{red_intensity:.0f} G:{green_intensity:.0f}\nArea:{cell_size}px'
+                ax.text(0.02, 0.02, info_text, transform=ax.transAxes, fontsize=7,
+                       verticalalignment='bottom', horizontalalignment='left',
+                       bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+                
+                # 绘制颜色条矩形（右下角）
+                # 计算归一化的颜色深浅 (0-1)
+                if red_max > red_min:
+                    red_norm = (red_intensity - red_min) / (red_max - red_min)
+                else:
+                    red_norm = 0.5
+                if green_max > green_min:
+                    green_norm = (green_intensity - green_min) / (green_max - green_min)
+                else:
+                    green_norm = 0.5
+                
+                # 红色方框 - 颜色深浅表示强度
+                red_color = (1.0, 1.0 - red_norm * 0.8, 1.0 - red_norm * 0.8)  # 从浅粉到深红
+                rect_red = plt.Rectangle((0.75, 0.02), 0.10, 0.08, transform=ax.transAxes,
+                                         facecolor=red_color, edgecolor='darkred', linewidth=1.5)
+                ax.add_patch(rect_red)
+                
+                # 绿色方框 - 颜色深浅表示强度
+                green_color = (1.0 - green_norm * 0.8, 1.0, 1.0 - green_norm * 0.8)  # 从浅绿到深绿
+                rect_green = plt.Rectangle((0.87, 0.02), 0.10, 0.08, transform=ax.transAxes,
+                                           facecolor=green_color, edgecolor='darkgreen', linewidth=1.5)
+                ax.add_patch(rect_green)
 
         # 隐藏多余的子图
         for idx in range(len(all_cell_ids), len(axes)):
@@ -222,7 +284,9 @@ class Visualizer:
                     color='C0', linewidth=2, markersize=6, label='Correlation')
         
         if not np.isnan(corr_fit_results['k']) and corr_fit_results['k'] > 0:
-            t_fit = np.linspace(all_time.min(), all_time.max(), 100)
+            # 使用有效数据点的时间范围，避免外推到跳过区域
+            valid_time = all_time[~is_skipped]
+            t_fit = np.linspace(valid_time.min(), valid_time.max(), 100)
             fit_func = delayed_first_order_reaction if fit_model == 'delayed_first_order' else first_order_reaction
             y_fit = fit_func(t_fit, corr_fit_results['A0'], corr_fit_results['k'], corr_fit_results['A_inf'], corr_fit_results.get('delay', 0))
             ax1.plot(t_fit, y_fit, '--', label='Fitted curve', color='red', linewidth=2)
@@ -265,7 +329,9 @@ class Visualizer:
             ax3.plot(ch1_time_all[~ch1_skipped], ch1_values_all[~ch1_skipped], 'o-', 
                     label='Channel 1', linewidth=2, markersize=6)
         if not np.isnan(ch1_fit_results['k']) and ch1_fit_results['k'] > 0:
-            t_fit = np.linspace(ch1_time_all.min(), ch1_time_all.max(), 100)
+            # 使用有效数据点的时间范围，避免外推到跳过区域
+            valid_ch1_time = ch1_time_all[~ch1_skipped]
+            t_fit = np.linspace(valid_ch1_time.min(), valid_ch1_time.max(), 100)
             y_fit = fit_func(t_fit, ch1_fit_results['A0'], ch1_fit_results['k'], ch1_fit_results['A_inf'], ch1_fit_results.get('delay', 0))
             ax3.plot(t_fit, y_fit, '--', label='Fitted curve', color='red', linewidth=2)
         ax3.set_xlabel('Time (s)')
@@ -287,7 +353,9 @@ class Visualizer:
             ax4.plot(ch2_time_all[~ch2_skipped], ch2_values_all[~ch2_skipped], 'o-', 
                     label='Channel 2', linewidth=2, markersize=6, color='green')
         if not np.isnan(ch2_fit_results['k']) and ch2_fit_results['k'] > 0:
-            t_fit = np.linspace(ch2_time_all.min(), ch2_time_all.max(), 100)
+            # 使用有效数据点的时间范围，避免外推到跳过区域
+            valid_ch2_time = ch2_time_all[~ch2_skipped]
+            t_fit = np.linspace(valid_ch2_time.min(), valid_ch2_time.max(), 100)
             y_fit = fit_func(t_fit, ch2_fit_results['A0'], ch2_fit_results['k'], ch2_fit_results['A_inf'], ch2_fit_results.get('delay', 0))
             ax4.plot(t_fit, y_fit, '--', label='Fitted curve', color='red', linewidth=2)
         ax4.set_xlabel('Time (s)')
@@ -302,11 +370,14 @@ class Visualizer:
         # 5. Scatter Plot (if needed)
         if include_scatter:
             ax5 = axes[2, 0]
-            # Get data from first timepoint after skip_initial_frames for this cell
-            # 按时间排序后取第N帧的数据
+            # Get data from first valid timepoint (within range) for this cell
             cell_data_list = [cd for cd in analysis.all_cells if cd.cell_id == cell_id]
             sorted_cell_data = sorted(cell_data_list, key=lambda c: c.time_point)
-            first_time_data = sorted_cell_data[analysis.skip_initial_frames] if len(sorted_cell_data) > analysis.skip_initial_frames else None
+            first_time_data = None
+            for idx, cd in enumerate(sorted_cell_data):
+                if analysis.is_frame_in_range(idx):
+                    first_time_data = cd
+                    break
             if first_time_data:
                 mask = ~(np.isnan(first_time_data.intensity1) | np.isnan(first_time_data.intensity2))
                 ch1_clean = first_time_data.intensity1[mask]
@@ -377,12 +448,15 @@ class Visualizer:
         for analysis in analyses:
             file_path = analysis.file_path
             file_stem = Path(file_path).stem
-            skip_frames = analysis.skip_initial_frames
                 
             for cell_id, cell_list in analysis.cells.items():
-                # 获取第一个有效时间点的数据（按时间排序后跳过前N帧）
+                # 获取第一个有效时间点的数据（在指定范围内的第一帧）
                 sorted_cells = sorted(cell_list, key=lambda c: c.time_point)
-                first_cell_data = sorted_cells[skip_frames] if len(sorted_cells) > skip_frames else None
+                first_cell_data = None
+                for idx, cell_data in enumerate(sorted_cells):
+                    if analysis.is_frame_in_range(idx):
+                        first_cell_data = cell_data
+                        break
                     
                 if first_cell_data is None:
                     continue
@@ -703,10 +777,10 @@ class Visualizer:
             raise ValueError(f"Cell {cell_id} not found")
         time_points = []
         intensities = []
-        # 按时间排序后跳过前N帧（而不是按时间值过滤）
+        # 按时间排序后只保留范围内的帧
         sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
         for idx, cell_data in enumerate(sorted_cells):
-            if idx >= analysis.skip_initial_frames:  # 跳过前N帧
+            if analysis.is_frame_in_range(idx):  # 使用统一的范围判断
                 time_points.append(cell_data.time_point)
                 if channel == 'channel1':
                     intensities.append(np.mean(cell_data.intensity1))
@@ -733,7 +807,8 @@ class Visualizer:
         sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
         for idx, cell_data in enumerate(sorted_cells):
             time_points.append(cell_data.time_point)
-            is_skipped.append(idx < analysis.skip_initial_frames)
+            # 使用统一的范围判断：不在范围内的点标记为跳过
+            is_skipped.append(not analysis.is_frame_in_range(idx))
             if channel == 'channel1':
                 intensities.append(np.mean(cell_data.intensity1))
             elif channel == 'channel2':

@@ -293,16 +293,21 @@ def process_single_file_io(args):
     """
     处理单个文件的IO部分 (加载图像、蒙版，提取细胞数据，创建TimeSeriesAnalysis对象)
     Parameters:
-    - args: (image_file, mask_path, skip_initial_frames, nd2_search_dirs[, analysis_channels])
+    - args: (image_file, mask_path, skip_initial_frames, max_frames, nd2_search_dirs[, analysis_channels])
     Returns:
     - TimeSeriesAnalysis object or None
     """
     # 支持向后兼容的参数解包
     if len(args) == 4:
+        # 旧版本兼容：没有 max_frames
         image_file, mask_path, skip_initial_frames, nd2_search_dirs = args
+        max_frames = None
+        analysis_channels = None
+    elif len(args) == 5:
+        image_file, mask_path, skip_initial_frames, max_frames, nd2_search_dirs = args
         analysis_channels = None
     else:
-        image_file, mask_path, skip_initial_frames, nd2_search_dirs, analysis_channels = args
+        image_file, mask_path, skip_initial_frames, max_frames, nd2_search_dirs, analysis_channels = args
     if mask_path is None:
         return None
     
@@ -383,13 +388,19 @@ def process_single_file_io(args):
         file_path=image_file,
         time_points=time_points,
         skip_initial_frames=skip_initial_frames,
+        max_frames=max_frames,
         original_nd2_path=original_nd2_path,
         position_index=position_idx
     )
     
-    # 调试：输出跳过帧数设置
+    # 调试：输出帧范围设置
+    range_info = []
     if skip_initial_frames > 0:
-        print(f"  Skip initial frames: {skip_initial_frames} (will exclude first {skip_initial_frames} time points from fitting)")
+        range_info.append(f"skip first {skip_initial_frames}")
+    if max_frames is not None:
+        range_info.append(f"use only first {max_frames}")
+    if range_info:
+        print(f"  Frame range: {', '.join(range_info)} (fitting on frames {skip_initial_frames} to {max_frames if max_frames else time_points - 1})")
 
     # 获取细胞ID - 确保是整数类型
     unique_cells = np.unique(mask)

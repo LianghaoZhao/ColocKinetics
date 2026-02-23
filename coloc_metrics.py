@@ -10,16 +10,16 @@ class CoLocalizationMetrics:
 
     @staticmethod
     def get_correlation_over_time_of_a_cell(analysis: FileData, cell_id: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """获取指定细胞的相关系数随时间的变化 (from CellData)，只返回有效点（跳过前N帧后的）"""
+        """获取指定细胞的相关系数随时间的变化 (from CellData)，只返回有效点（在指定范围内的）"""
         if cell_id not in analysis.cells:
             raise ValueError(f"Cell {cell_id} not found")
         time_points = []
         correlations = []
         p_values = []
-        # 按时间排序后跳过前N帧（而不是按时间值过滤）
+        # 按时间排序后只保留范围内的帧
         sorted_cells = sorted(analysis.cells[cell_id], key=lambda c: c.time_point)
         for idx, cell_data in enumerate(sorted_cells):
-            if idx >= analysis.skip_initial_frames:  # 跳过前N帧
+            if analysis.is_frame_in_range(idx):  # 使用统一的范围判断方法
                 time_points.append(cell_data.time_point)
                 corr, p_val = CoLocalizationMetrics._calculate_single_timepoint_correlation(
                     cell_data.intensity1, cell_data.intensity2
@@ -53,7 +53,8 @@ class CoLocalizationMetrics:
             )
             correlations.append(corr)
             p_values.append(p_val)
-            is_skipped.append(idx < analysis.skip_initial_frames)
+            # 使用统一的范围判断：不在范围内的点标记为跳过
+            is_skipped.append(not analysis.is_frame_in_range(idx))
         
         return np.array(time_points), np.array(correlations), np.array(p_values), np.array(is_skipped)
 
@@ -80,10 +81,10 @@ class CoLocalizationMetrics:
             ch1_values = []
             ch2_values = []
 
-            # 按时间排序后跳过前N帧（而不是按时间值过滤）
+            # 按时间排序后只保留范围内的帧
             sorted_cells = sorted(cell_list, key=lambda c: c.time_point)
             for idx, cell_data in enumerate(sorted_cells):
-                if idx >= analysis.skip_initial_frames:  # 跳过前N帧
+                if analysis.is_frame_in_range(idx):  # 使用统一的范围判断方法
                     # Calculate correlation for this specific time point
                     corr, p_val = CoLocalizationMetrics._calculate_single_timepoint_correlation(
                         cell_data.intensity1, cell_data.intensity2
