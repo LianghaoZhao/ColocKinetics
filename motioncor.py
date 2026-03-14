@@ -7,6 +7,9 @@ import matplotlib
 matplotlib.use('Agg')  # 无GUI后端，必须在导入pyplot之前设置
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
+
+# 设置全局字体为 Arial
+plt.rcParams['font.family'] = 'Arial'
 import nd2
 from pathlib import Path
 import json
@@ -348,7 +351,8 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
                           border=0, max_iterations=10, threshold=0.5, 
                           batch_size=100, use_gpu=True, gpu_device=0,
                           focus_loss_threshold=0.7, skip_focus_loss=True,
-                          focus_loss_background=100.0, min_valid_ratio=0.8):
+                          focus_loss_background=100.0, min_valid_ratio=0.8,
+                          min_size_ratio=0.8):
     """
     处理图像序列并进行漂移校正
 
@@ -369,6 +373,7 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
     - skip_focus_loss: 是否跳过丢焦序列（默认True）
     - focus_loss_background: 丢焦检测时扣除的背景值（默认100.0）
     - min_valid_ratio: 最小有效帧比例（默认0.8），丢焦时若有效帧>=此比例则截断继续处理
+    - min_size_ratio: 裁剪后最小尺寸比例（默认0.8），若最终图像尺寸小于原始尺寸的此比例则丢弃
     
     Returns:
     - cumulative_shifts: 累积漂移数组，如果跳过则为 None
@@ -551,7 +556,9 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
         'threshold': focus_loss_threshold,
         'truncated': False,  # 是否被截断
         'truncated_frames': None,  # 截断后的帧数
-        'skipped': False  # 是否被完全跳过
+        'skipped': False,  # 是否被完全跳过
+        'discarded': False,  # 是否因尺寸不足被丢弃
+        'discard_reason': None  # 丢弃原因
     }
     
     if focus_lost:
@@ -637,6 +644,22 @@ def process_image_sequence(input_path, output_dir, channel_selection='all',
         cumulative_shifts[:, 1] -= top_crop
 
         print(f"Auto-cropped from {original_shape} to {corrected_frames.shape}")
+
+        # 检查裁剪后尺寸是否满足最小比例要求
+        original_H, original_W = original_shape[2], original_shape[3]
+        new_H, new_W = corrected_frames.shape[2], corrected_frames.shape[3]
+        size_ratio_H = new_H / original_H
+        size_ratio_W = new_W / original_W
+        min_ratio = min(size_ratio_H, size_ratio_W)
+
+        if min_ratio < min_size_ratio:
+            print(f"WARNING: Cropped size ratio {min_ratio:.1%} < {min_size_ratio:.0%}, "
+                  f"discarding sequence: {input_path}")
+            focus_loss_info['discarded'] = True
+            focus_loss_info['discard_reason'] = f'Cropped size ratio {min_ratio:.1%} < {min_size_ratio:.0%}'
+            focus_loss_info['original_size'] = (int(original_H), int(original_W))
+            focus_loss_info['cropped_size'] = (int(new_H), int(new_W))
+            return None, None, focus_loss_info
 
     # 创建输出目录
     output_path = Path(output_dir) / f"{base_name}_corrected"

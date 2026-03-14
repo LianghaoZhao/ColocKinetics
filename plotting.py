@@ -18,6 +18,12 @@ os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 
+# 设置全局字体为 Arial
+plt.rcParams['font.family'] = 'Arial'
+# 设置字体类型为 TrueType，使文字以真实文本而非路径保存（便于编辑和搜索）
+plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams['ps.fonttype'] = 42
+
 class Visualizer:
     """处理可视化结果的类"""
     def __init__(self, output_dir: str):
@@ -390,7 +396,7 @@ class Visualizer:
                 mask = ~(np.isnan(first_time_data.intensity1) | np.isnan(first_time_data.intensity2))
                 ch1_clean = first_time_data.intensity1[mask]
                 ch2_clean = first_time_data.intensity2[mask]
-                ax5.scatter(ch1_clean, ch2_clean, alpha=0.6, s=20)
+                ax5.scatter(ch1_clean, ch2_clean, alpha=0.1, s=20)
                 ax5.set_xlabel('Channel 1 Intensity')
                 ax5.set_ylabel('Channel 2 Intensity')
                 # Calculate correlation for this specific data point for the title
@@ -456,6 +462,14 @@ class Visualizer:
         for analysis in analyses:
             file_path = analysis.file_path
             file_stem = Path(file_path).stem
+            
+            # 获取该文件的最大时间（使用范围内的时间点）
+            max_time = 0.0
+            for cell_list in analysis.cells.values():
+                sorted_cells = sorted(cell_list, key=lambda c: c.time_point)
+                for idx, cell_data in enumerate(sorted_cells):
+                    if analysis.is_frame_in_range(idx):
+                        max_time = max(max_time, cell_data.time_point)
                 
             for cell_id, cell_list in analysis.cells.items():
                 # 获取第一个有效时间点的数据（在指定范围内的第一帧）
@@ -497,8 +511,14 @@ class Visualizer:
                     
                 t50 = reaction_df.loc[mask, 'correlation_t50'].values[0]
                 t90 = reaction_df.loc[mask, 'correlation_t90'].values[0]
+                r_squared = reaction_df.loc[mask, 'correlation_r_squared'].values[0]
+                correlation_A0 = reaction_df.loc[mask, 'correlation_A0'].values[0]
+                correlation_A_inf = reaction_df.loc[mask, 'correlation_A_inf'].values[0]
                 if np.isnan(t50) or np.isnan(t90):
                     continue
+                
+                # 计算Pearson变化值
+                pearson_change = correlation_A0 - correlation_A_inf
                     
                 ratio_data.append({
                     'file_path': file_path,
@@ -509,7 +529,12 @@ class Visualizer:
                     'ratio': ratio,
                     'n_pixels': first_cell_data.n_pixels,  # 细胞面积（像素数）
                     't50': t50,
-                    't90': t90
+                    't90': t90,
+                    'r_squared': r_squared,  # 添加拟合R²字段
+                    'max_time': max_time,  # 添加最大时间字段
+                    'pearson_A0': correlation_A0,  # Pearson初始值
+                    'pearson_A_inf': correlation_A_inf,  # Pearson终值
+                    'pearson_change': pearson_change  # Pearson变化值（A0 - A_inf）
                 })
             
         if len(ratio_data) == 0:
@@ -609,6 +634,8 @@ class Visualizer:
         # 绘制直方图
         counts, bins, _ = ax.hist(pixels, bins=100, density=True, alpha=0.6, 
                                   color=color, edgecolor=edge_color, label='Data')
+        ax.tick_params(axis='both', labelsize=14)
+        ax.locator_params(axis='both', nbins=5)
             
         # 绘制GMM拟合曲线
         x = np.linspace(pixels.min(), pixels.max(), 500)

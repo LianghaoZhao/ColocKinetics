@@ -132,6 +132,7 @@ def run_cellpose_on_files(
                     png_path = Path(output_dir) / f"{image_path.stem}_seg.png"
                     # 创建 RGB 可视化
                     from matplotlib import pyplot as plt
+                    plt.rcParams['font.family'] = 'Arial'  # 设置字体为 Arial
                     plt.figure(figsize=(10, 10))
                     plt.imshow(mask > 0, cmap='gray')
                     plt.axis('off')

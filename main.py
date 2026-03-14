@@ -336,10 +336,10 @@ def main():
     parser = argparse.ArgumentParser(description='ColocKinetics: ND2/TIF Co-localization Analysis Pipeline')
     
     # 输入输出
-    parser.add_argument('image_pattern', type=str,
-                       help='Pattern for image files (e.g., "*.nd2", "data/*.tif")')
-    parser.add_argument('--output-dir', type=str, default='coloc_result',
-                       help='Output directory for results (default: coloc_result)')
+    parser.add_argument('image_pattern', type=str, nargs='+',
+                       help='Pattern(s) for image files (e.g., "*.nd2", "data/*.tif") or multiple patterns for merged analysis')
+    parser.add_argument('--output-dir', type=str, default=None,
+                       help='Output directory for results (default: auto-generate from input filename, or "merged_output" for multiple files)')
     
     # 流程控制
     parser.add_argument('--skip-motioncor', action='store_true',
@@ -399,8 +399,6 @@ def main():
                        help='Analysis channels specified by wavelengths, e.g. "561,488" (channel1,channel2)')
     
     # 输出控制
-    parser.add_argument('--save-results', action='store_true',
-                       help='Save results to CSV files')
     parser.add_argument('--include-scatter', action='store_true',
                        help='Include scatter plot in figures')
     parser.add_argument('--include-individual-plots', action='store_true',
@@ -438,7 +436,15 @@ def main():
     print("ColocKinetics Pipeline")
     print("=" * 60)
     
-    image_files = glob.glob(args.image_pattern)
+    # 支持多个输入模式，合并所有匹配的文件
+    image_files = []
+    for pattern in args.image_pattern:
+        matched = glob.glob(pattern)
+        image_files.extend(matched)
+    
+    # 去重
+    image_files = list(set(image_files))
+    
     if not image_files:
         print(f"No image files found matching: {args.image_pattern}")
         return
@@ -447,8 +453,20 @@ def main():
     for f in image_files:
         print(f"  - {Path(f).name}")
     
-    # 设置输出目录
-    output_dir = args.output_dir
+    # 设置输出目录：自动生成或使用指定值
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        # 根据输入文件自动生成输出文件夹
+        if len(image_files) == 1:
+            # 单文件：使用文件名（去掉扩展名）
+            base_name = Path(image_files[0]).stem
+            output_dir = f"{base_name}_output"
+        else:
+            # 多文件：使用 merged_output
+            output_dir = "merged_output"
+    
+    print(f"\nOutput directory: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
     
     # Step 1: Motion Correction (漂移校正)
@@ -662,16 +680,15 @@ def main():
         with open(cache_file, 'wb') as f:
             pickle.dump(cache_data, f)
 
-        # 保存CSV结果
-        if args.save_results:
-            # 保存基础汇总数据
-            output_file = os.path.join(output_dir, 'correlation_analysis_results.csv')
-            summary_df.to_csv(output_file, index=False)
-            print(f"Basic co-localization results saved to: {output_file}")
-            # 保存反应拟合结果
-            reaction_output_file = os.path.join(output_dir, 'reaction_fitting_results.csv')
-            reaction_df.to_csv(reaction_output_file, index=False)
-            print(f"Reaction fitting results saved to: {reaction_output_file}")
+        # 保存CSV结果（默认保存）
+        # 保存基础汇总数据
+        output_file = os.path.join(output_dir, 'correlation_analysis_results.csv')
+        summary_df.to_csv(output_file, index=False)
+        print(f"Basic co-localization results saved to: {output_file}")
+        # 保存反应拟合结果
+        reaction_output_file = os.path.join(output_dir, 'reaction_fitting_results.csv')
+        reaction_df.to_csv(reaction_output_file, index=False)
+        print(f"Reaction fitting results saved to: {reaction_output_file}")
 
     # 可视化 (调用 plotting 模块)
     print("\nGenerating visualizations...")
@@ -692,12 +709,18 @@ def main():
     )
     
     # 使用独立的统计分析模块执行分析（读取刚生成的CSV）
+    print("\n" + "=" * 60)
+    print("Step 4: Statistical Analysis")
+    print("=" * 60)
     stats_analyzer = StatisticsAnalyzer(output_dir)
     try:
         stats_df = stats_analyzer.load_data()
         stats_analyzer.run_analysis(stats_df)
+        print("Statistical analysis completed successfully")
     except FileNotFoundError:
         print("Warning: ratio_t50_raw_data.csv not found, skipping statistics analysis")
+    except Exception as e:
+        print(f"Error during statistical analysis: {e}")
     
     print("\n" + "=" * 60)
     print("Pipeline completed!")

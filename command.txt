@@ -1,0 +1,5 @@
+python C:\Users\zhao\Nextcloud3\ColocKinetics\plot_kinetics_summary.py *.csv -o merged_output --max-time 300 --min-rsq 0.9 --scatter
+python C:\Users\zhao\Nextcloud3\ColocKinetics\statistics_analysis.py 20260213_ratio_t50_raw_data.csv 20260214_ratio_t50_raw_data.csv 20260215_ratio_t50_raw_data.csv --percentile-bins both --max-time 300 --bin-step 10
+python C:\Users\zhao\Nextcloud3\ColocKinetics\statistics_analysis.py 20260213_ratio_t50_raw_data.csv 20260214_ratio_t50_raw_data.csv 20260215_ratio_t50_raw_data.csv  --max-time 300 
+>python C:\Users\zhao\Nextcloud3\ColocKinetics\statistics_analysis.py 20260213_ratio_t50_raw_data.csv 20260214_ratio_t50_raw_data.csv 20260215_ratio_t50_raw_data.csv  --max-time 300 --bottom 50
+>python C:\Users\zhao\Nextcloud3\ColocKinetics\statistics_analysis.py 20260213_ratio_t50_raw_data.csv 20260214_ratio_t50_raw_data.csv 20260215_ratio_t50_raw_data.csv  --max-time 300 --top 20
